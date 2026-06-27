@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "files": [
+    "terminal.py",
+    "dashboard.py",
+    "terminal_data.py",
+    "chart_render.py",
+    "update.py"
+  ]
+}
