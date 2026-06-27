@@ -897,7 +897,9 @@ HELP = """\
    PORT                     your portfolio: capital, allocation, live income
    MON / HOME               live market monitor      Esc   back to monitor
    NEWS                     daily market news board — click a headline to read it in-terminal
-   (also: WIRE / HEADLINES)                          Q     quit
+   (also: WIRE / HEADLINES)
+   POPOUT                   open charts live in a browser tab (if your terminal can't show images)
+                            type POPOUT again (or POPOUT OFF) to go back to inline   ·   Q  quit
 """
 
 
@@ -1231,6 +1233,9 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             await self.show_news_dashboard(); return
         if cmd in ("AUCTIONS", "AUCTION", "AUCT", "TD"):
             await self.show_auctions(); return
+        if cmd in ("POPOUT", "POP", "BROWSER"):
+            on = (parts[1] not in ("OFF", "0", "NO")) if len(parts) > 1 else not self._chart_popout
+            self._set_popout(on); return
         if cmd in ("PORT", "PORTFOLIO", "HOLDINGS", "PNL"):
             await self.show_portfolio(); return
         if cmd in ("CMP", "COMPARE") or "VS" in parts:
@@ -1501,6 +1506,28 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         if self._chart_popout:
             self._chart_to_browser(img)
         self.chart().query_one("#chimg", TermImage).image = img
+
+    def _set_popout(self, on):
+        """Toggle chart pop-out (charts open live in the browser). Persisted via a
+        .popout flag file so it survives restarts and auto-updates."""
+        self._chart_popout = bool(on)
+        flag = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".popout")
+        try:
+            if on:
+                open(flag, "w").write("1")
+            elif os.path.exists(flag):
+                os.remove(flag)
+        except Exception:
+            pass
+        if on:
+            self.notify("Pop-out ON — charts open live in a browser tab "
+                        "(auto-updates). Keep it open beside the terminal.")
+            if self.cur_base_img is not None:           # push the current chart now
+                self._popout_opened = False
+                self._chart_to_browser(self.cur_base_img)
+        else:
+            self.notify("Pop-out OFF — charts render inline in the terminal.")
+            self._popout_opened = False
 
     async def _render_chart_image(self):
         """(Re)render the chart image from cached bars — used on load & on toggle."""
