@@ -956,6 +956,12 @@ class MarketTerminal(App):
         self.cmp_index100 = False      # compare view: % return (False) vs indexed-to-100
         self._pending_add = None       # ticker awaiting a section choice
         self._pending_sections = []
+        # pop-out mode: open charts as crisp PNGs in the browser instead of inline
+        # (for terminals/GPUs that can't render images). Enable via env var or a
+        # ".popout" file next to this script.
+        self._chart_popout = bool(os.environ.get("MKT_CHART_POPOUT")) or os.path.exists(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), ".popout"))
+        self._popout_opened = False
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1403,7 +1409,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             chart_render.render_compare_png, self._cmp_items, w_px, h_px,
             self.cmp_index100, self._cmp_levels)
         self.cur_base_img, self.cur_geom = img, geom
-        self.chart().query_one("#chimg", TermImage).image = img
+        self._publish_chart(img)
         self._refresh_compare_header()
 
     async def toggle_index100(self):
@@ -1466,6 +1472,36 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self.cur_tf_label = tf_label
         await self._render_chart_image()
 
+    def _chart_to_browser(self, img):
+        """Pop-out mode: write the chart PNG into an auto-refreshing HTML page and
+        open it once in the browser. Subsequent renders overwrite it -> tab updates."""
+        import base64
+        import io
+        import tempfile
+        buf = io.BytesIO(); img.save(buf, "PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        html = ("<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                "<meta http-equiv='refresh' content='2'><title>Kessler Chart</title>"
+                "<style>html,body{margin:0;background:#0a0a0a;}"
+                "img{width:100%;height:auto;display:block;}</style></head>"
+                f"<body><img src='data:image/png;base64,{b64}'></body></html>")
+        path = os.path.join(tempfile.gettempdir(), "kessler_chart.html")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+            if not self._popout_opened:
+                webbrowser.open("file://" + path)
+                self._popout_opened = True
+                self.notify("Chart opened in your browser (auto-updates as you "
+                            "change ticker/timeframe). Keep that tab open beside the terminal.")
+        except Exception:
+            pass
+
+    def _publish_chart(self, img):
+        if self._chart_popout:
+            self._chart_to_browser(img)
+        self.chart().query_one("#chimg", TermImage).image = img
+
     async def _render_chart_image(self):
         """(Re)render the chart image from cached bars — used on load & on toggle."""
         w_px, h_px = self._chart_px(self.cur_mode)
@@ -1474,7 +1510,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self.cur_bars, self.cur_mode, w_px, h_px, self.show_indicators)
         self.cur_base_img = img
         self.cur_geom = geom
-        self.chart().query_one("#chimg", TermImage).image = img
+        self._publish_chart(img)
         self._refresh_chart_header()
 
     async def toggle_indicators(self):
