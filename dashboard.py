@@ -184,46 +184,73 @@ for _col, _title, _prov, _rows in SECTIONS:
         )
 
 
-# ---- user watchlist (persisted, editable from the terminal) ----------------
+# ---- user-added tickers, filed PER SECTION (persisted, editable) -----------
 WATCH_FILE = Path(__file__).resolve().parent / "watchlist.json"
 
 
-def _load_watchlist():
+def _load_adds():
+    """{section_title: [tickers]}. Migrates a legacy flat list to a WATCHLIST."""
     try:
-        return [str(t).upper() for t in json.loads(WATCH_FILE.read_text())]
+        d = json.loads(WATCH_FILE.read_text())
+        if isinstance(d, list):                       # legacy flat watchlist
+            return {"★ WATCHLIST": [str(t).upper() for t in d]} if d else {}
+        return {k: [str(t).upper() for t in v] for k, v in d.items() if v}
     except Exception:
-        return []
+        return {}
 
 
-WATCHLIST = _load_watchlist()
-for _t in WATCHLIST:
-    STATE.setdefault(_t, Quote(label=_t, decimals=2))
+USER_ADDS = _load_adds()
+for _sec, _ts in USER_ADDS.items():
+    for _t in _ts:
+        STATE.setdefault(_t, Quote(label=_t, decimals=2))
 
 
-def _save_watchlist():
+def _save_adds():
     try:
-        WATCH_FILE.write_text(json.dumps(WATCHLIST))
+        WATCH_FILE.write_text(json.dumps(USER_ADDS))
     except Exception:
         pass
 
 
-def add_watch(ticker):
+def addable_sections():
+    """Section titles a stock/ETF/crypto can be filed under (ticker sections)."""
+    out = []
+    for _col, title, prov, _rows in SECTIONS:
+        if prov in ("cnbc", "binance") and title not in out:
+            out.append(title)
+    for extra in USER_ADDS:                           # keep any custom sections
+        if extra not in out:
+            out.append(extra)
+    return out
+
+
+def add_to_section(ticker, section):
     t = ticker.upper().strip()
-    if not t or t in WATCHLIST:
+    lst = USER_ADDS.setdefault(section, [])
+    if not t or t in lst:
         return False
-    WATCHLIST.append(t)
+    lst.append(t)
     STATE.setdefault(t, Quote(label=t, decimals=2))
-    _save_watchlist()
+    _save_adds()
     return True
 
 
-def remove_watch(ticker):
+def remove_ticker(ticker):
+    """Remove a ticker from whichever user section(s) it was added to."""
     t = ticker.upper().strip()
-    if t in WATCHLIST:
-        WATCHLIST.remove(t)
-        _save_watchlist()
-        return True
-    return False
+    removed = False
+    for sec, lst in list(USER_ADDS.items()):
+        if t in lst:
+            lst.remove(t); removed = True
+        if not lst:
+            del USER_ADDS[sec]
+    if removed:
+        _save_adds()
+    return removed
+
+
+def all_added():
+    return [t for ts in USER_ADDS.values() for t in ts]
 
 
 TRACKED = set()   # extra tickers polled for live quotes (e.g. portfolio positions)
@@ -238,7 +265,7 @@ def track(tickers):
 
 def cnbc_symbols():
     syms = [r[1] for _, _, prov, rows in SECTIONS if prov == "cnbc" for r in rows]
-    extra = [t for t in (list(WATCHLIST) + sorted(TRACKED)) if t not in syms]
+    extra = [t for t in (all_added() + sorted(TRACKED)) if t not in syms]
     return syms + extra
 
 
@@ -584,10 +611,15 @@ def render_section(title, rows, provider="cnbc"):
 def render():
     ncols = max(col for col, *_ in SECTIONS) + 1
     columns = {i: [] for i in range(ncols)}
+    used = set()
     for col, title, _prov, rows in SECTIONS:
-        columns[col].append(render_section(title, rows, _prov))
-    if WATCHLIST:   # user-added tickers, pinned to the top of column 0
-        columns[0].insert(0, render_section("★ WATCHLIST", [(t, t) for t in WATCHLIST], "cnbc"))
+        extra = [(t, t) for t in USER_ADDS.get(title, [])]   # user adds, appended
+        used.add(title)
+        columns[col].append(render_section(title, list(rows) + extra, _prov))
+    # any custom sections that aren't part of the built-in layout -> column 0 top
+    for title, ts in USER_ADDS.items():
+        if title not in used and ts:
+            columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
 
     grid = Table.grid(expand=True, padding=(0, 2))
     for _ in range(ncols):

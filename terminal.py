@@ -890,8 +890,9 @@ HELP = """\
    TIMEFRAMES   1D 1W 1M 3M 6M 1Y 5Y 10Y ALL   (click the bar, or type as above)
    IN A CHART   hover the mouse to read the value at that point
 
-   ADD NVDA                 add ticker(s) to the monitor watchlist (or click ＋ Add)
-   DEL NVDA                 remove ticker(s) from the watchlist
+   ADD NVDA                 add a ticker — then pick which section it goes in
+   ADD NVDA STOCKS          add straight into a named section (skip the prompt)
+   DEL NVDA                 remove a ticker from the monitor
 
    PORT                     your portfolio: capital, allocation, live income
    MON / HOME               live market monitor      Esc   back to monitor
@@ -953,6 +954,8 @@ class MarketTerminal(App):
         self._cmp_items = []
         self._cmp_levels = []          # compare symbols drawn on the right (rate) axis
         self.cmp_index100 = False      # compare view: % return (False) vs indexed-to-100
+        self._pending_add = None       # ticker awaiting a section choice
+        self._pending_sections = []
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1121,7 +1124,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
     def _rebuild_pool(self):
         seen, pool = set(), []
         for c in (SUGGEST_COMMANDS + self._alias_tickers + POPULAR_TICKERS
-                  + list(dash.WATCHLIST) + self._ticker_universe):
+                  + dash.all_added() + self._ticker_universe):
             u = c.upper()
             if u not in seen:
                 seen.add(u); pool.append(u)
@@ -1167,6 +1170,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self.top().update(render_portfolio(self.positions))
 
     def action_go_monitor(self):
+        self._pending_add = None       # cancel any pending "add to section" prompt
         self.mode = "monitor"
         self._show_only("top")
         self.tick()
@@ -1200,6 +1204,16 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         parts = raw.upper().split()
         cmd = parts[0]
 
+        if self._pending_add is not None:               # awaiting a section choice
+            if cmd in ("ESC", "CANCEL", "X", "Q"):
+                self._pending_add = None; self.action_go_monitor(); return
+            sec = self._match_section(raw.strip())
+            if sec:
+                self._file_ticker(self._pending_add, sec)
+            else:
+                self.notify("Type the section number or name (or X to cancel)")
+            return
+
         if cmd in ("Q", "EXIT", "QUIT"):
             await self.action_quit(); return
         if cmd in ("MON", "HOME"):
@@ -1226,11 +1240,11 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
                 self.notify("Compare needs 2+ tickers — e.g.  CMP AAPL MSFT")
             return
         if cmd in ("ADD", "+", "WATCH"):
-            await self._watch_add(parts[1:]); return
+            await self._add_ticker(parts[1:]); return
         if cmd in ("DEL", "RM", "REMOVE", "-", "UNWATCH"):
             for tk in parts[1:]:
-                dash.remove_watch(tk)
-            self.action_go_monitor(); return
+                dash.remove_ticker(tk)
+            self._rebuild_pool(); self.action_go_monitor(); return
 
         ticker = cmd
         rest = parts[1:]
@@ -1287,23 +1301,69 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         except Exception:
             self.bottom().update(Text(""))
 
-    async def _watch_add(self, tickers):
-        if not tickers:
-            self.notify("Usage: ADD <TICKER> …  (e.g. ADD NVDA AMZN)")
+    async def _add_ticker(self, parts):
+        if not parts:
+            self.notify("Usage: ADD <TICKER>  (then pick a section)")
             return
-        added, bad = [], []
-        for tk in tickers:
-            fund = await td.fetch_fundamentals(self.session, tk)
-            if fund and dash.add_watch(tk):
-                added.append(tk.upper())
-            elif not fund:
-                bad.append(tk.upper())
+        tk = parts[0].upper()
+        section_arg = " ".join(parts[1:]).strip() if len(parts) > 1 else ""
+        # validate the ticker first
+        fund = await td.fetch_fundamentals(self.session, tk)
+        if not fund and not td.is_crypto(tk):
+            self.notify(f"Unknown ticker: {tk}", severity="error"); return
+        if section_arg:                                  # ADD NVDA STOCKS  (direct)
+            sec = self._match_section(section_arg)
+            if not sec:
+                self.notify(f"No section matching '{section_arg}'", severity="error"); return
+            self._file_ticker(tk, sec); return
+        # no section given -> ask which one
+        self._pending_add = tk
+        self._show_section_picker(tk)
+
+    def _match_section(self, arg):
+        secs = dash.addable_sections()
+        a = arg.strip().upper()
+        if a.isdigit():
+            i = int(a) - 1
+            return secs[i] if 0 <= i < len(secs) else None
+        for s in secs:                                   # exact (case-insensitive)
+            if s.upper() == a:
+                return s
+        hits = [s for s in secs if a in s.upper()]       # unique substring
+        return hits[0] if len(hits) == 1 else None
+
+    def _show_section_picker(self, ticker):
+        self.mode = "addpick"; self._show_only("top")
+        secs = dash.addable_sections()
+        self._pending_sections = secs
+        t = Text()
+        t.append(f"  Add  {ticker}  to which section?\n\n", style=f"bold {AMBER}")
+        for i, s in enumerate(secs, 1):
+            line = Text()
+            line.append(f"   {i:>2}.  ", style=DIM)
+            line.append(s + "\n", style=Style(color="orange1",
+                        meta={"@click": f"app.file_ticker({i - 1})"}))
+            t.append_text(line)
+        t.append("\n   click a section, or type its number / name  ·  Esc cancels",
+                 style=DIM)
+        self.top().update(t)
+
+    def action_file_ticker(self, idx):
+        if self._pending_add is None:
+            return
+        try:
+            sec = self._pending_sections[int(idx)]
+        except (IndexError, ValueError, TypeError):
+            return
+        self._file_ticker(self._pending_add, sec)
+
+    def _file_ticker(self, ticker, section):
+        dash.add_to_section(ticker, section)
+        dash.track([ticker])
+        self._pending_add = None
         self._rebuild_pool()
         self.action_go_monitor()
-        if added:
-            self.notify(f"★ Added to watchlist: {', '.join(added)}")
-        if bad:
-            self.notify(f"Unknown ticker: {', '.join(bad)}", severity="error")
+        self.notify(f"Added {ticker} to {section}")
 
     async def show_chart(self, ticker, custom=None):
         self.mode = "chart"
