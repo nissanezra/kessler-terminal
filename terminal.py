@@ -980,6 +980,7 @@ class MarketTerminal(App):
         # image blinks slightly in Windows Terminal; toggle off with HOVER OFF
         # (then the read-out shows flicker-free in the header instead).
         self._hover_redraw = os.environ.get("MKT_HOVER", "1") != "0"
+        self._cross_timer = None       # debounce: draw the hover cross after settling
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1618,28 +1619,44 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         if self.cur_mode == "compare":
             n = g["n"]
             idx = max(0, min(n - 1, round(data_f * (n - 1))))
-            if idx == self.cur_hover:
+        else:
+            if not self.cur_bars:
                 return
-            self.cur_hover = idx
-            if self.cur_base_img is not None and self._hover_redraw:
-                date = g["dates"][idx] if idx < len(g.get("dates", [])) else None
-                self.chart().query_one("#chimg", TermImage).image = \
-                    chart_render.draw_compare_markers(self.cur_base_img, g, idx, date)
-            self._refresh_compare_header()
-            return
-        if not self.cur_bars:
-            return
-        n = len(self.cur_bars)
-        idx = max(0, min(n - 1, round(g["xmin"] + data_f * (g["xmax"] - g["xmin"]))))
+            n = len(self.cur_bars)
+            idx = max(0, min(n - 1, round(g["xmin"] + data_f * (g["xmax"] - g["xmin"]))))
         if idx == self.cur_hover:
             return
         self.cur_hover = idx
-        if self.cur_base_img is not None and self._hover_redraw:
-            b = self.cur_bars[idx]
-            label = f"{b['t']}   {b['c']:,.2f}"
-            crossed = chart_render.draw_crosshair(self.cur_base_img, g, idx, b["c"], label)
-            self.chart().query_one("#chimg", TermImage).image = crossed
-        self._refresh_chart_header()
+        # read-out updates live (header, no blink); the cross is drawn on the image
+        # only after the pointer settles, so it doesn't blink while you move.
+        if self.cur_mode == "compare":
+            self._refresh_compare_header()
+        else:
+            self._refresh_chart_header()
+        if self._hover_redraw and self.cur_base_img is not None:
+            if self._cross_timer is not None:
+                self._cross_timer.stop()
+            self._cross_timer = self.set_timer(0.18, self._draw_hover_cross)
+
+    def _draw_hover_cross(self):
+        self._cross_timer = None
+        g = self.cur_geom
+        idx = self.cur_hover
+        if g is None or idx is None or self.cur_base_img is None:
+            return
+        try:
+            if self.cur_mode == "compare":
+                date = g["dates"][idx] if idx < len(g.get("dates", [])) else None
+                img = chart_render.draw_compare_markers(self.cur_base_img, g, idx, date)
+            else:
+                if idx >= len(self.cur_bars):
+                    return
+                b = self.cur_bars[idx]
+                img = chart_render.draw_crosshair(self.cur_base_img, g, idx, b["c"],
+                                                  f"{b['t']}   {b['c']:,.2f}")
+            self.chart().query_one("#chimg", TermImage).image = img
+        except Exception:
+            pass
 
     def prompt_custom_range(self):
         try:
