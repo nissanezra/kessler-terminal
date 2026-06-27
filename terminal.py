@@ -976,9 +976,10 @@ class MarketTerminal(App):
             self._chart_text = False
         else:
             self._chart_text = _sys.platform.startswith("win")
-        # redrawing a sixel image on every mouse-move flickers in Windows Terminal;
-        # there, keep the hover read-out in the header but don't repaint the image.
-        self._hover_redraw = not os.environ.get("WT_SESSION")
+        # draw the hover cross + date/value on the chart. Repainting the sixel
+        # image blinks slightly in Windows Terminal; toggle off with HOVER OFF
+        # (then the read-out shows flicker-free in the header instead).
+        self._hover_redraw = os.environ.get("MKT_HOVER", "1") != "0"
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1251,6 +1252,13 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         if cmd in ("POPOUT", "POP", "BROWSER"):
             on = (parts[1] not in ("OFF", "0", "NO")) if len(parts) > 1 else not self._chart_popout
             self._set_popout(on); return
+        if cmd in ("HOVER", "CROSS"):
+            self._hover_redraw = (parts[1] not in ("OFF", "0", "NO")) if len(parts) > 1 \
+                else not self._hover_redraw
+            self.notify("Hover cross ON (blinks a little in Windows Terminal)"
+                        if self._hover_redraw else
+                        "Hover cross OFF — date/value shows in the top bar, no blink")
+            return
         if cmd in ("PORT", "PORTFOLIO", "HOLDINGS", "PNL"):
             await self.show_portfolio(); return
         if cmd in ("CMP", "COMPARE") or "VS" in parts:
