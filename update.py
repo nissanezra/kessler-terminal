@@ -39,7 +39,32 @@ def _local_version():
         return 0
 
 
+def _ensure_wezterm_config():
+    """Force WezTerm to software rendering so chart images composite reliably on
+    machines whose GPU/driver renders text but leaves graphics (sixel) blank.
+    Writes ~/.wezterm.lua only if absent or previously written by us."""
+    cfg = os.path.join(os.path.expanduser("~"), ".wezterm.lua")
+    marker = "-- kessler-terminal auto-config (do not remove this line)"
+    body = (marker + "\nreturn {\n"
+            "  front_end = 'Software',\n"
+            "  enable_kitty_graphics = true,\n"
+            "  max_fps = 30,\n}\n")
+    try:
+        if os.path.exists(cfg):
+            cur = open(cfg, encoding="utf-8", errors="ignore").read()
+            if marker not in cur:
+                return                       # user's own config — leave it alone
+            if cur.strip() == body.strip():
+                return                       # already current
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write(body)
+        print("  update: applied WezTerm software-rendering config")
+    except Exception as e:
+        print(f"  update: wezterm config skipped — {e}")
+
+
 def main():
+    _ensure_wezterm_config()                 # every launch: keep the render config in place
     try:
         manifest = json.loads(_get(REPO_BASE + "version.json"))
     except Exception as e:
