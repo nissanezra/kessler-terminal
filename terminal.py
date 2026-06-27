@@ -287,6 +287,7 @@ class ChartView(Vertical):
             yield Input(placeholder="MM-DD-YYYY", id="dto", max_length=10)
             yield Button("Go", id="dgo")
         yield TermImage(id="chimg")
+        yield Static(id="chtext")           # text/braille chart (image-less terminals)
 
     def on_mouse_move(self, event: events.MouseMove):
         # event bubbles up from the image; map screen x to the image region
@@ -929,6 +930,7 @@ class MarketTerminal(App):
     #bottom { padding: 0 1; height: auto; }
     #reader { height: 1fr; padding: 0 2; background: #0a0a0a; display: none; }
     #readerbody { height: auto; width: 1fr; }
+    #chtext { height: 1fr; width: 1fr; padding: 0 1; display: none; }
     #cmdbar { height: 3; }
     #addbtn { width: 11; height: 3; min-width: 9; background: #1d1d1d;
               color: orange; border: tall #444; }
@@ -964,6 +966,10 @@ class MarketTerminal(App):
         self._chart_popout = bool(os.environ.get("MKT_CHART_POPOUT")) or os.path.exists(
             os.path.join(os.path.dirname(os.path.abspath(__file__)), ".popout"))
         self._popout_opened = False
+        # text/braille charts (work on terminals that can't show images).
+        # default ON on Windows; override with env MKT_CHART_TEXT=0/1.
+        _tc = os.environ.get("MKT_CHART_TEXT", "")
+        self._chart_text = (_tc == "1") if _tc in ("0", "1") else _sys.platform.startswith("win")
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1405,9 +1411,30 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self._cmp_levels = [s for s, _ in items if td.resolve_fred(s)]
         await self._render_compare_image()
 
+    def _chart_cells(self):
+        """Chart area size in CHARACTER cells (for text/plotext charts)."""
+        cols = max(self.app.size.width - 4, 60)
+        rows = max(self.app.size.height - 9, 12)
+        return cols, rows
+
+    def _show_chart_text(self, ansi):
+        """Display a text/braille chart (hide the image widget)."""
+        self.chart().query_one("#chimg", TermImage).display = False
+        w = self.chart().query_one("#chtext", Static)
+        w.display = True
+        w.update(Text.from_ansi(ansi) if ansi else Text("  no chart data", style=RED))
+
     async def _render_compare_image(self):
         """(Re)render the compare overlay from cached items — used on load & toggle."""
         if not self._cmp_items:
+            return
+        if self._chart_text:
+            cols, rows = self._chart_cells()
+            txt = await asyncio.to_thread(chart_render.render_compare_text,
+                                          self._cmp_items, cols, rows, self.cmp_index100)
+            self.cur_base_img, self.cur_geom = None, None
+            self._show_chart_text(txt)
+            self._refresh_compare_header()
             return
         w_px, h_px = self._chart_px("chart")
         img, geom = await asyncio.to_thread(
@@ -1505,7 +1532,10 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
     def _publish_chart(self, img):
         if self._chart_popout:
             self._chart_to_browser(img)
-        self.chart().query_one("#chimg", TermImage).image = img
+        self.chart().query_one("#chtext", Static).display = False
+        imgw = self.chart().query_one("#chimg", TermImage)
+        imgw.display = True
+        imgw.image = img
 
     def _set_popout(self, on):
         """Toggle chart pop-out (charts open live in the browser). Persisted via a
@@ -1530,7 +1560,16 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self._popout_opened = False
 
     async def _render_chart_image(self):
-        """(Re)render the chart image from cached bars — used on load & on toggle."""
+        """(Re)render the chart from cached bars — image or text per terminal."""
+        if self._chart_text:
+            cols, rows = self._chart_cells()
+            txt = await asyncio.to_thread(chart_render.render_chart_text,
+                                          self.cur_display, self.cur_tf_label,
+                                          self.cur_bars, self.show_indicators, cols, rows)
+            self.cur_base_img, self.cur_geom = None, None
+            self._show_chart_text(txt)
+            self._refresh_chart_header()
+            return
         w_px, h_px = self._chart_px(self.cur_mode)
         img, geom = await asyncio.to_thread(
             chart_render.render_chart_png, self.cur_display, self.cur_tf_label,

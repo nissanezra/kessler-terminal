@@ -63,8 +63,23 @@ def _ensure_wezterm_config():
         print(f"  update: wezterm config skipped — {e}")
 
 
+def _ensure_deps():
+    """Make sure newer dependencies are present (auto-deploy without a reinstall)."""
+    try:
+        import plotext  # noqa: F401
+    except Exception:
+        print("  update: installing chart library (plotext)…")
+        try:
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "plotext"],
+                           timeout=120)
+        except Exception as e:
+            print(f"  update: plotext install skipped — {e}")
+
+
 def main():
     _ensure_wezterm_config()                 # every launch: keep the render config in place
+    _ensure_deps()
     try:
         manifest = json.loads(_get(REPO_BASE + "version.json"))
     except Exception as e:

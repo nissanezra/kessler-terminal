@@ -16,6 +16,85 @@ from PIL import Image, ImageDraw, ImageFont
 
 import terminal_data as td
 
+
+# ---------------------------------------------------------------------------
+# Text/braille charts — render directly with terminal characters (plotext).
+# Used on terminals that can't display images (e.g. WezTerm on some Windows
+# GPUs). Works everywhere, inline, no image protocol needed.
+# ---------------------------------------------------------------------------
+
+def _common_dates(items):
+    """Shared date axis + per-series forward-filled close values (rebased)."""
+    maps = [{b["t"]: b["c"] for b in bars} for _, bars in items]
+    base = max(bars[0]["t"] for _, bars in items)
+    dates = [d for d in sorted(set().union(*maps)) if d >= base]
+    out = []
+    for (sym, _), m in zip(items, maps):
+        prior = [c for d, c in sorted(m.items()) if d <= base]
+        last = prior[-1] if prior else next(iter(m.values()))
+        vals = []
+        for d in dates:
+            if d in m:
+                last = m[d]
+            vals.append(last)
+        out.append((sym, vals))
+    return dates, out
+
+
+def render_chart_text(symbol, tf, bars, indicators=False, w=120, h=30):
+    """Return an ANSI string of a single price chart drawn with terminal chars."""
+    import plotext as plt_t
+    closes = [b["c"] for b in bars]
+    n = len(closes)
+    last, first = closes[-1], closes[0]
+    chg = (last / first - 1) * 100 if first else 0
+    plt_t.clear_figure()
+    plt_t.theme("dark")
+    plt_t.plotsize(max(w, 40), max(h, 12))
+    plt_t.plot(closes, color="white")
+    if indicators:
+        for win, col in ((50, "orange"), (100, "green"), (200, "magenta+")):
+            s = td.sma(closes, win)
+            xs = [i for i, v in enumerate(s) if v is not None]
+            if xs:
+                plt_t.plot(xs, [s[i] for i in xs], color=col)
+    step = max(n // 6, 1)
+    pos = list(range(0, n, step))
+    plt_t.xticks(pos, [bars[i]["t"][2:] for i in pos])
+    sign = "+" if chg >= 0 else ""
+    plt_t.title(f"{symbol}   {last:,.2f}   {sign}{chg:.2f}%   {tf}    "
+                f"{bars[0]['t']} -> {bars[-1]['t']}")
+    return plt_t.build()
+
+
+def render_compare_text(items, w=120, h=30, index100=False):
+    """Return an ANSI string overlaying each ticker's % return (text chart)."""
+    import plotext as plt_t
+    items = [(s, b) for s, b in items if b and len(b) >= 2]
+    if len(items) < 2:
+        return ""
+    dates, series = _common_dates(items)
+    N = len(dates)
+    plt_t.clear_figure()
+    plt_t.theme("dark")
+    plt_t.plotsize(max(w, 40), max(h, 12))
+    colors = ["white", "orange", "cyan", "magenta+", "green+", "red"]
+    for (sym, vals), color in zip(series, colors):
+        base = vals[0] or 1
+        if index100:
+            plot = [v / base * 100 for v in vals]
+            lbl = f"{sym} {plot[-1]:.1f}"
+        else:
+            plot = [(v / base - 1) * 100 for v in vals]
+            lbl = f"{sym} {plot[-1]:+.1f}%"
+        plt_t.plot(range(N), plot, color=color, label=lbl)
+    step = max(N // 6, 1)
+    pos = list(range(0, N, step))
+    plt_t.xticks(pos, [dates[i][2:] for i in pos])
+    mode = "indexed 100" if index100 else "% return"
+    plt_t.title("COMPARE  " + " vs ".join(s for s, _ in items) + f"   ({mode})")
+    return plt_t.build()
+
 BG = "#0a0a0a"
 GRID = "#1e1e1e"
 FG = "#888888"
