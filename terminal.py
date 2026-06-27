@@ -966,10 +966,16 @@ class MarketTerminal(App):
         self._chart_popout = bool(os.environ.get("MKT_CHART_POPOUT")) or os.path.exists(
             os.path.join(os.path.dirname(os.path.abspath(__file__)), ".popout"))
         self._popout_opened = False
-        # text/braille charts (work on terminals that can't show images).
-        # default ON on Windows; override with env MKT_CHART_TEXT=0/1.
+        # text/braille charts for terminals that can't show images. Windows
+        # Terminal CAN (sets WT_SESSION) -> use crisp image charts there; other
+        # Windows terminals -> text fallback. Override with MKT_CHART_TEXT=0/1.
         _tc = os.environ.get("MKT_CHART_TEXT", "")
-        self._chart_text = (_tc == "1") if _tc in ("0", "1") else _sys.platform.startswith("win")
+        if _tc in ("0", "1"):
+            self._chart_text = (_tc == "1")
+        elif os.environ.get("WT_SESSION"):          # Windows Terminal -> images work
+            self._chart_text = False
+        else:
+            self._chart_text = _sys.platform.startswith("win")
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
