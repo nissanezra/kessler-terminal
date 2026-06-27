@@ -41,9 +41,16 @@ def _common_dates(items):
     return dates, out
 
 
+_NO_PLOTEXT = ("\n  Finishing chart setup… please fully close and reopen the "
+               "terminal once.\n  (installing the chart library — only happens once)\n")
+
+
 def render_chart_text(symbol, tf, bars, indicators=False, w=120, h=30):
     """Return an ANSI string of a single price chart drawn with terminal chars."""
-    import plotext as plt_t
+    try:
+        import plotext as plt_t
+    except Exception:
+        return _NO_PLOTEXT
     closes = [b["c"] for b in bars]
     n = len(closes)
     last, first = closes[-1], closes[0]
@@ -69,7 +76,10 @@ def render_chart_text(symbol, tf, bars, indicators=False, w=120, h=30):
 
 def render_compare_text(items, w=120, h=30, index100=False):
     """Return an ANSI string overlaying each ticker's % return (text chart)."""
-    import plotext as plt_t
+    try:
+        import plotext as plt_t
+    except Exception:
+        return _NO_PLOTEXT
     items = [(s, b) for s, b in items if b and len(b) >= 2]
     if len(items) < 2:
         return ""
