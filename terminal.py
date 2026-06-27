@@ -976,6 +976,9 @@ class MarketTerminal(App):
             self._chart_text = False
         else:
             self._chart_text = _sys.platform.startswith("win")
+        # redrawing a sixel image on every mouse-move flickers in Windows Terminal;
+        # there, keep the hover read-out in the header but don't repaint the image.
+        self._hover_redraw = not os.environ.get("WT_SESSION")
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1610,7 +1613,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             if idx == self.cur_hover:
                 return
             self.cur_hover = idx
-            if self.cur_base_img is not None:
+            if self.cur_base_img is not None and self._hover_redraw:
                 date = g["dates"][idx] if idx < len(g.get("dates", [])) else None
                 self.chart().query_one("#chimg", TermImage).image = \
                     chart_render.draw_compare_markers(self.cur_base_img, g, idx, date)
@@ -1623,7 +1626,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         if idx == self.cur_hover:
             return
         self.cur_hover = idx
-        if self.cur_base_img is not None:
+        if self.cur_base_img is not None and self._hover_redraw:
             b = self.cur_bars[idx]
             label = f"{b['t']}   {b['c']:,.2f}"
             crossed = chart_render.draw_crosshair(self.cur_base_img, g, idx, b["c"], label)
