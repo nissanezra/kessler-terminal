@@ -458,6 +458,55 @@ def draw_crosshair(base, geom, idx, value, label=None):
     return img
 
 
+def draw_measure(base, geom, pts, bars=None):
+    """Overlay the measure tool: a dot at each clicked point, a connecting line
+    between two points, and a Δ-price / Δ-% label. `pts` is [(idx, price)] with
+    1 or 2 entries. Colors green/red by direction (Bloomberg-style)."""
+    img = base.copy()
+    w, h = img.size
+    d = ImageDraw.Draw(img)
+    x0, x1 = geom["x0f"] * w, geom["x1f"] * w
+    ytop, ybot = (1 - geom["y1f"]) * h, (1 - geom["y0f"]) * h
+    xr = geom["xmax"] - geom["xmin"] or 1
+    yr = geom["ymax"] - geom["ymin"] or 1
+    amber = (255, 176, 0)
+
+    def px_of(idx, value):
+        px = x0 + (idx - geom["xmin"]) / xr * (x1 - x0)
+        py = ytop + (geom["ymax"] - value) / yr * (ybot - ytop)
+        return px, py
+
+    pxy = [px_of(i, v) for i, v in pts]
+    for px, py in pxy:                        # anchor dots
+        d.ellipse([px - 4, py - 4, px + 4, py + 4], outline=amber, width=2)
+    if len(pts) < 2:
+        return img
+
+    (ia, pa), (ib, pb) = pts[0], pts[1]
+    (ax, ay), (bx, by) = pxy[0], pxy[1]
+    up = pb >= pa
+    col = (33, 201, 122) if up else (255, 90, 90)
+    d.line([(ax, ay), (bx, by)], fill=col, width=2)
+
+    dchg = pb - pa
+    pct = (pb / pa - 1) * 100 if pa else 0
+    label = f"{dchg:+,.2f}   {pct:+.2f}%"
+    try:
+        font = ImageFont.truetype(_FONT_PATH, 20)
+    except Exception:
+        font = ImageFont.load_default()
+    tb = d.textbbox((0, 0), label, font=font)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    mx, my = (ax + bx) / 2, (ay + by) / 2
+    lx = mx - tw / 2
+    ly = (my - th - 18) if up else (my + 12)         # above an up-move, below a down-move
+    lx = max(x0 + 2, min(lx, x1 - tw - 12))          # keep inside the plot
+    ly = max(ytop + 2, min(ly, ybot - th - 12))
+    d.rectangle([lx - 6, ly - 5, lx + tw + 6, ly + th + 7], fill=(18, 18, 18), outline=col)
+    d.text((lx, ly), label, fill=(245, 245, 245), font=font)
+    return img
+
+
 if __name__ == "__main__":
     import asyncio
     import aiohttp

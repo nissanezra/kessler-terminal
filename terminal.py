@@ -132,7 +132,8 @@ def _cell_px():
         return (9, 18)
 
 
-def _timeframe_bar(active_tf, indicators=True, compare=False, index100=False):
+def _timeframe_bar(active_tf, indicators=True, compare=False, index100=False,
+                   measure=False):
     line = Text("  ")
     spans = []
     col = 2
@@ -160,6 +161,12 @@ def _timeframe_bar(active_tf, indicators=True, compare=False, index100=False):
         line.append(ind, style="bold black on green3" if indicators else "grey85 on grey23")
         spans.append((col, col + len(ind) - 1, "__IND__"))
         col += len(ind) + 1
+        line.append(" ")
+        col += 1
+        meas = f" MEAS {'ON' if measure else 'OFF'} "     # measure tool (2-point Δ)
+        line.append(meas, style="bold black on orange1" if measure else "grey85 on grey23")
+        spans.append((col, col + len(meas) - 1, "__MEAS__"))
+        col += len(meas) + 1
     line.append(" ")
     col += 1
     cmpl = " +CMP "                                   # start / add to a comparison
@@ -168,16 +175,63 @@ def _timeframe_bar(active_tf, indicators=True, compare=False, index100=False):
     if compare:
         line.append("   (toggle % return / indexed-to-100 · +CMP = add a ticker)", style=DIM)
     else:
-        line.append("   (CUSTOM = dates · IND = SMA/RSI · +CMP = compare)", style=DIM)
+        line.append("   (CUSTOM = dates · IND = SMA/RSI · MEAS = measure · +CMP = compare)",
+                    style=DIM)
     return line, spans
 
 
-def _chart_header(symbol, tf, bars, mode, hover_idx, indicators=True):
+def _measure_readout(pts, bars):
+    """One-line summary of the current measure anchors: Δ price, Δ%, days."""
+    if not pts:
+        return Text("  MEASURE — click the first point on the chart", style=AMBER)
+    (ia, pa) = pts[0]
+    h = Text("  ⟂ ", style=AMBER)
+    h.append(f"{bars[ia]['t']} {pa:,.2f}", style="bold white")
+    if len(pts) < 2:
+        h.append("   → click the second point", style=DIM)
+        return h
+    (ib, pb) = pts[1]
+    if ib < ia:                              # always read left → right
+        ia, pa, ib, pb = ib, pb, ia, pa
+    dchg = pb - pa
+    pct = (pb / pa - 1) * 100 if pa else 0
+    days = abs(_bar_days(bars, ia, ib))
+    col = GREEN if dchg >= 0 else RED
+    h = Text("  ⟂ ", style=AMBER)
+    h.append(f"{bars[ia]['t']}", style="bold white")
+    h.append(" → ", style=DIM)
+    h.append(f"{bars[ib]['t']}", style="bold white")
+    h.append(f"   Δ {dchg:+,.2f}", style=col)
+    h.append(f"  {pct:+.2f}%", style=f"bold {col}")
+    if days:
+        ann = (pct / 100) and ((pb / pa) ** (365.0 / days) - 1) * 100 if days else None
+        h.append(f"   {days}d", style=DIM)
+        if ann is not None and days >= 2:
+            h.append(f"  ({ann:+.1f}%/yr)", style=DIM)
+    h.append("   ·  click again to restart", style=DIM)
+    return h
+
+
+def _bar_days(bars, ia, ib):
+    """Calendar days between two bar indices (falls back to bar count)."""
+    try:
+        d0 = datetime.fromisoformat(bars[ia]["t"]); d1 = datetime.fromisoformat(bars[ib]["t"])
+        return (d1 - d0).days
+    except (ValueError, KeyError, TypeError):
+        return ib - ia
+
+
+def _chart_header(symbol, tf, bars, mode, hover_idx, indicators=True,
+                  measure=False, measure_pts=None):
     """Compact interactive header (timeframe bar + hover readout). The symbol,
     price, change and legend already live in the chart image itself."""
     closes = [b["c"] for b in bars]
     n = len(closes)
     full = (mode == "chart") and indicators
+
+    if measure:
+        bar, spans = _timeframe_bar(tf, indicators, measure=True)
+        return Group(bar, _measure_readout(measure_pts or [], bars)), spans
 
     if hover_idx is not None and 0 <= hover_idx < n:
         b = bars[hover_idx]
@@ -199,7 +253,7 @@ def _chart_header(symbol, tf, bars, mode, hover_idx, indicators=True):
     else:
         h = Text("  hover the chart to read any point's value", style=DIM)
 
-    bar, spans = _timeframe_bar(tf, indicators)
+    bar, spans = _timeframe_bar(tf, indicators, measure=False)
     return Group(bar, h), spans
 
 
@@ -227,6 +281,8 @@ class ChartHeader(Static):
                         self.app.prompt_custom_range()
                     elif tf == "__IND__":
                         self.app.run_worker(self.app.toggle_indicators(), exclusive=True)
+                    elif tf == "__MEAS__":
+                        self.app.set_measure(not self.app._measure_on)
                     elif tf == "__IDX100__":
                         self.app.run_worker(self.app.toggle_index100(), exclusive=True)
                     elif tf == "__CMP__":
@@ -298,6 +354,18 @@ class ChartView(Vertical):
         region = img.region
         if region.width and region.contains(event.screen_x, event.screen_y):
             self.app.chart_hover(event.screen_x - region.x, region.width)
+
+    def on_click(self, event: events.Click):
+        # a click on the chart image drops a measure anchor (when measure mode is on)
+        if not getattr(self.app, "_measure_on", False):
+            return
+        try:
+            img = self.query_one("#chimg", TermImage)
+        except Exception:
+            return
+        region = img.region
+        if region.width and region.contains(event.screen_x, event.screen_y):
+            self.app.chart_measure_click(event.screen_x - region.x, region.width)
 
 
 # ===========================================================================
@@ -893,6 +961,8 @@ HELP = """\
 
    TIMEFRAMES   1D 1W 1M 3M 6M 1Y 5Y 10Y ALL   (click the bar, or type as above)
    IN A CHART   hover the mouse to read the value at that point
+   M / MEAS                 measure tool: click two points for Δ price, % move & days
+                            (or click MEAS in the chart bar; click a 3rd point to restart)
 
    ADD NVDA                 add a ticker — then pick which section it goes in
    ADD NVDA STOCKS          add straight into a named section (skip the prompt)
@@ -984,6 +1054,10 @@ class MarketTerminal(App):
         # (then the read-out shows flicker-free in the header instead).
         self._hover_redraw = os.environ.get("MKT_HOVER", "1") != "0"
         self._cross_timer = None       # debounce: draw the hover cross after settling
+        # measure tool (Bloomberg-style): click two points to read Δ price / Δ% /
+        # days between them. _measure_pts holds up to two (idx, price) anchors.
+        self._measure_on = False
+        self._measure_pts = []
         self.cur_custom = None
         self.positions = []
         self._wire_on = False          # True only while the WIRE news board is showing
@@ -1263,6 +1337,10 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
                         if self._hover_redraw else
                         "Hover cross OFF — date/value shows in the top bar, no blink")
             return
+        if cmd in ("ANN", "MEASURE", "MEAS", "M", "ANNOTATE"):
+            on = (parts[1] not in ("OFF", "0", "NO")) if len(parts) > 1 \
+                else not self._measure_on
+            self.set_measure(on); return
         if cmd in ("PORT", "PORTFOLIO", "HOLDINGS", "PNL"):
             await self.show_portfolio(); return
         if cmd in ("CMP", "COMPARE") or "VS" in parts:
@@ -1582,6 +1660,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
 
     async def _render_chart_image(self):
         """(Re)render the chart from cached bars — image or text per terminal."""
+        self._measure_pts = []          # a fresh render invalidates old anchors
         if self._chart_text:
             cols, rows = self._chart_cells()
             txt = await asyncio.to_thread(chart_render.render_chart_text,
@@ -1609,7 +1688,8 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
 
     def _refresh_chart_header(self):
         g, spans = _chart_header(self.cur_display, self.cur_tf_label, self.cur_bars,
-                                 self.cur_mode, self.cur_hover, self.show_indicators)
+                                 self.cur_mode, self.cur_hover, self.show_indicators,
+                                 self._measure_on, self._measure_pts)
         self.chart().query_one("#chdr", ChartHeader).set_content(g, spans)
 
     def chart_hover(self, x_cell, widget_w):
@@ -1636,7 +1716,9 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self._refresh_compare_header()
         else:
             self._refresh_chart_header()
-        if self._hover_redraw and self.cur_base_img is not None:
+        # while measuring, keep the measure overlay on screen (don't repaint a
+        # hover cross over it); the header still tracks the value live.
+        if self._hover_redraw and not self._measure_on and self.cur_base_img is not None:
             if self._cross_timer is not None:
                 self._cross_timer.stop()
             self._cross_timer = self.set_timer(0.18, self._draw_hover_cross)
@@ -1657,6 +1739,63 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
                 b = self.cur_bars[idx]
                 img = chart_render.draw_crosshair(self.cur_base_img, g, idx, b["c"],
                                                   f"{b['t']}   {b['c']:,.2f}")
+            self.chart().query_one("#chimg", TermImage).image = img
+        except Exception:
+            pass
+
+    def set_measure(self, on):
+        """Toggle the measure tool (click two chart points to read Δ price/%/days)."""
+        self._measure_on = bool(on)
+        self._measure_pts = []
+        if on:
+            if self.cur_mode == "compare":
+                self._measure_on = False
+                self.notify("Measure works on a single chart, not compare view")
+                return
+            self.notify("Measure ON — click two points on the chart to read "
+                        "the price change, % move and days between them. "
+                        "Type M (or click MEAS) to turn off.")
+        else:
+            self._redraw_measure()        # clears the overlay back to a clean chart
+            self.notify("Measure OFF")
+        if self.cur_mode != "compare":
+            self._refresh_chart_header()
+
+    def _measure_idx(self, x_cell, widget_w):
+        """Map a click x (cells from the image's left) to the nearest bar index."""
+        g = self.cur_geom
+        if not widget_w or g is None or not self.cur_bars:
+            return None
+        frac = x_cell / widget_w
+        axspan = g["x1f"] - g["x0f"] or 1
+        data_f = (frac - g["x0f"]) / axspan
+        n = len(self.cur_bars)
+        return max(0, min(n - 1, round(g["xmin"] + data_f * (g["xmax"] - g["xmin"]))))
+
+    def chart_measure_click(self, x_cell, widget_w):
+        if self.cur_mode == "compare":
+            return
+        idx = self._measure_idx(x_cell, widget_w)
+        if idx is None:
+            return
+        pt = (idx, self.cur_bars[idx]["c"])
+        if len(self._measure_pts) >= 2:    # third click starts a fresh measurement
+            self._measure_pts = [pt]
+        else:
+            self._measure_pts.append(pt)
+        self._redraw_measure()
+        self._refresh_chart_header()
+
+    def _redraw_measure(self):
+        """Repaint the chart from the clean base image plus the current anchors."""
+        if self.cur_base_img is None or self.cur_geom is None:
+            return
+        try:
+            if not self._measure_pts:
+                img = self.cur_base_img
+            else:
+                img = chart_render.draw_measure(self.cur_base_img, self.cur_geom,
+                                                self._measure_pts, self.cur_bars)
             self.chart().query_one("#chimg", TermImage).image = img
         except Exception:
             pass
