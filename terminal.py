@@ -1208,7 +1208,8 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self.title = _app_title()
         conn = aiohttp.TCPConnector(ssl=_SSL_CTX) if _SSL_CTX else None
         self.session = aiohttp.ClientSession(connector=conn)
-        for fn in (dash.cnbc_loop, dash.binance_loop, dash.fred_loop, dash.cftc_loop):
+        for fn in (dash.cnbc_loop, dash.binance_loop, dash.fred_loop, dash.cftc_loop,
+                   dash.bloomberg_loop):
             asyncio.create_task(fn())
         self.set_interval(0.4, self.tick)
         self.set_interval(90, self._wire_tick)     # refresh WIRE news board if open

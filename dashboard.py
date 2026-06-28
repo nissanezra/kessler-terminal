@@ -637,6 +637,54 @@ def render_section(title, rows, provider="cnbc"):
     return Group(header, t, Text(""))
 
 
+# ---- Bloomberg headlines (packaged build only, read-only, lower-right) ------
+BLOOMBERG_HEADLINES = []        # list of {"title", "age"} kept fresh by bloomberg_loop
+BLOOMBERG_QUERY = "site:bloomberg.com markets OR economy OR stocks"
+
+
+def _clip(s, n):
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[:n - 1].rstrip() + "…"
+
+
+def render_bloomberg(headlines):
+    """Read-only Bloomberg headline ticker (no @click meta -> not clickable)."""
+    t = Table.grid(padding=(0, 1), expand=True)
+    t.add_column(justify="left", no_wrap=True)
+    for h in headlines:
+        line = Text()
+        line.append("• ", style=AMBER)
+        line.append(_clip(h.get("title", ""), 46), style="grey85")
+        if h.get("age"):
+            line.append(f"  {h['age']}", style=DIM)
+        t.add_row(line)
+    header = Text(" BLOOMBERG", style=f"bold {AMBER} on grey15")
+    header.pad_right(200)
+    return Group(header, t, Text(""))
+
+
+async def bloomberg_loop():
+    """Refresh Bloomberg headlines for the monitor (shipped builds only)."""
+    if not PACKAGED_BUILD:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            while True:
+                try:
+                    sec = await _td._fetch_section(
+                        session, "BLOOMBERG", "google", BLOOMBERG_QUERY, 12)
+                    items = sec.get("items") or []
+                    if items:
+                        BLOOMBERG_HEADLINES[:] = [
+                            {"title": it.get("title", ""), "age": it.get("age", "")}
+                            for it in items]
+                except Exception:
+                    pass
+                await asyncio.sleep(120)        # headlines refresh every 2 min
+    except asyncio.CancelledError:
+        return
+
+
 def render():
     ncols = max(col for col, *_ in SECTIONS) + 1
     columns = {i: [] for i in range(ncols)}
@@ -651,6 +699,10 @@ def render():
         for title, ts in USER_ADDS.items():
             if title not in used and ts:
                 columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
+
+    # Bloomberg headlines (shipped builds only) fill the lower-right free area
+    if PACKAGED_BUILD and BLOOMBERG_HEADLINES:
+        columns[ncols - 1].append(render_bloomberg(BLOOMBERG_HEADLINES))
 
     grid = Table.grid(expand=True, padding=(0, 2))
     for _ in range(ncols):
