@@ -184,6 +184,13 @@ for _col, _title, _prov, _rows in SECTIONS:
         )
 
 
+# Packaged/distributed builds carry an appname.txt (e.g. Robert's "KESSLER
+# TERMINAL"); the Mac dev copy has none. In packaged builds the old per-section
+# watchlist + ADD/pick flow is hidden — it's being replaced by a new sector-based
+# add. The dev copy keeps the watchlist working.
+PACKAGED_BUILD = (Path(__file__).resolve().parent / "appname.txt").exists()
+
+
 # ---- user-added tickers, filed PER SECTION (persisted, editable) -----------
 WATCH_FILE = Path(__file__).resolve().parent / "watchlist.json"
 
@@ -508,6 +515,7 @@ async def cftc_loop():
 # ---------------------------------------------------------------------------
 
 AMBER = "orange1"
+YELLOW = "#ffd400"        # ticker-label colour on the monitor (clickable + not)
 DIM = "grey50"
 
 
@@ -530,8 +538,27 @@ def fmt_pos(v, signed=False):
 
 
 # monitor symbol -> a command the terminal can open on click (chart "GP")
-_INDEX_CLICK = {".DJI": "DOW", ".SPX": "SPX", ".IXIC": "NASDAQ", ".RUT": "RUT",
-                ".VIX": "VIX"}
+_INDEX_CLICK = {".DJI": "DOW", ".SPX": "SPX", ".IXIC": "NASDAQ", ".RUT": "RUT"}
+
+# Futures / FX / world-index monitor symbols -> a tracking ETF the chart engine
+# CAN plot. The free feeds don't chart futures directly (they return no data), so
+# clicking a commodity/FX/world-index row opens its closest liquid ETF proxy
+# instead (e.g. GOLD @GC.1 -> GLD, COPPER @HG.1 -> CPER, DAX .GDAXI -> EWG).
+# (Only symbols whose proxy actually returns chart data are listed; coffee/cotton/
+# cocoa/CNY/RUB have no live free-chart ETF, so they stay non-clickable.)
+_PROXY_CLICK = {
+    "@CL.1": "USO", "@BZ.1": "BNO", "@NG.1": "UNG", "@RB.1": "UGA", "@GC.1": "GLD",
+    "@SI.1": "SLV", "@PL.1": "PPLT", "@PA.1": "PALL", "@HG.1": "CPER",
+    "@C.1": "CORN", "@W.1": "WEAT", "@S.1": "SOYB", "@SB.1": "CANE",
+    "@DJ.1": "DIA", "@SP.1": "SPY", "@ND.1": "QQQ",
+    "@TU.1": "SHY", "@FV.1": "IEI", "@TY.1": "IEF", "@TN.1": "IEF", "@US.1": "TLT",
+    ".BCOM": "DJP", ".SPGSCI": "GSG", ".VIX": "VIXY", ".TRAN": "IYT",
+    ".FTSE": "EWU", ".GDAXI": "EWG", ".FCHI": "EWQ", ".STOXX50E": "FEZ",
+    ".IBEX": "EWP", ".FTMIB": "EWI", ".SSMI": "EWL", ".N225": "EWJ",
+    ".HSI": "EWH", ".SSEC": "MCHI", ".KS11": "EWY",
+    ".DXY": "UUP", "EUR=": "FXE", "JPY=": "FXY", "GBP=": "FXB",
+    "CAD=": "FXC", "AUD=": "FXA",
+}
 
 # reverse the FRED alias table (series id -> a chartable alias), so clicking a
 # credit/inflation/economy row opens the right chart instead of the raw series id.
@@ -552,9 +579,11 @@ def _click_cmd(sym, provider="cnbc"):
         return (a + " GP") if a else None
     if sym in _INDEX_CLICK:                                 # US index -> DOW GP
         return _INDEX_CLICK[sym] + " GP"
+    if sym in _PROXY_CLICK:                                 # futures/FX/world idx -> ETF proxy
+        return _PROXY_CLICK[sym] + " GP"
     if sym.startswith("US") and sym[2:-1].isdigit() and sym[-1] in "MY":
         return sym + " GP"                                  # treasury yield -> US10Y GP
-    if sym[:1] in ".@" or sym.endswith("="):                # FX / futures / world idx
+    if sym[:1] in ".@" or sym.endswith("="):                # unmapped FX/futures/world idx
         return None
     return sym                                              # stock / ETF -> detail page
 
@@ -590,10 +619,10 @@ def render_section(title, rows, provider="cnbc"):
 
         cmd = _click_cmd(r[1], provider)
         if cmd:
-            lbl = Text(q.label, style=Style(color="orange1", bold=False,
+            lbl = Text(q.label, style=Style(color=YELLOW, bold=False,
                        meta={"@click": f"app.open_ticker({cmd!r})"}))
         else:
-            lbl = Text(q.label, style=AMBER)
+            lbl = Text(q.label, style=YELLOW)
 
         t.add_row(
             lbl,
@@ -612,14 +641,16 @@ def render():
     ncols = max(col for col, *_ in SECTIONS) + 1
     columns = {i: [] for i in range(ncols)}
     used = set()
+    show_adds = not PACKAGED_BUILD                          # watchlist hidden in shipped builds
     for col, title, _prov, rows in SECTIONS:
-        extra = [(t, t) for t in USER_ADDS.get(title, [])]   # user adds, appended
+        extra = [(t, t) for t in USER_ADDS.get(title, [])] if show_adds else []
         used.add(title)
         columns[col].append(render_section(title, list(rows) + extra, _prov))
     # any custom sections that aren't part of the built-in layout -> column 0 top
-    for title, ts in USER_ADDS.items():
-        if title not in used and ts:
-            columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
+    if show_adds:
+        for title, ts in USER_ADDS.items():
+            if title not in used and ts:
+                columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
 
     grid = Table.grid(expand=True, padding=(0, 2))
     for _ in range(ncols):

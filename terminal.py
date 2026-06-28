@@ -988,6 +988,8 @@ class MarketTerminal(App):
     /* clickable tickers/headlines: keep their colour, drop the link underline
        so the monitor reads as uniform amber. hover stays bold (no underline). */
     #top, #bottom, #readerbody {
+        link-color: #ffd400;
+        link-color-hover: #ffd400;
         link-style: not underline;
         link-style-hover: bold not underline;
     }
@@ -1418,6 +1420,9 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self.bottom().update(Text(""))
 
     async def _add_ticker(self, parts):
+        if dash.PACKAGED_BUILD:                  # watchlist/pick retired in shipped builds
+            self.notify("Adding tickers is being reworked — coming soon.")
+            return
         if not parts:
             self.notify("Usage: ADD <TICKER>  (then pick a section)")
             return
