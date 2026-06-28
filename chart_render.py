@@ -180,15 +180,15 @@ def render_chart_png(symbol, tf, bars, mode="chart", w_px=1600, h_px=900,
     last_s = f"{last:,.2f}"
     chg_s = f"{chg:+.2f}%   {tf}"
     rng_s = f"{bars[0]['t']}  →  {bars[-1]['t']}"
-    x = 0.012
-    fig.text(x, 0.965, symbol, color="black", fontsize=15, weight="bold",
+    tx = 0.012                              # title-layout cursor (NOT the x-data array)
+    fig.text(tx, 0.965, symbol, color="black", fontsize=15, weight="bold",
              family="monospace", bbox=dict(boxstyle="square,pad=0.3", fc=C_AMBER, ec="none"))
-    x += (len(symbol) + 3) * _cwf(15)
-    fig.text(x, 0.96, last_s, color=title_fg, fontsize=15, weight="bold", family="monospace")
-    x += (len(last_s) + 2) * _cwf(15)
-    fig.text(x, 0.96, chg_s, color=color, fontsize=14, family="monospace")
-    x += (len(chg_s) + 2) * _cwf(14)
-    fig.text(x, 0.962, rng_s, color=FG, fontsize=11, family="monospace")
+    tx += (len(symbol) + 3) * _cwf(15)
+    fig.text(tx, 0.96, last_s, color=title_fg, fontsize=15, weight="bold", family="monospace")
+    tx += (len(last_s) + 2) * _cwf(15)
+    fig.text(tx, 0.96, chg_s, color=color, fontsize=14, family="monospace")
+    tx += (len(chg_s) + 2) * _cwf(14)
+    fig.text(tx, 0.962, rng_s, color=FG, fontsize=11, family="monospace")
 
     # x ticks: ~8 evenly spaced date labels
     step = max(n // 8, 1)

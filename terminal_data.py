@@ -525,10 +525,11 @@ def _partial_from_entries(entries, annual):
 
 
 async def _concept_data(session, cik, candidates):
-    """Return (annual_series, partial), MERGED across all candidate tags.
+    """Return (annual_series, partial, ends), MERGED across all candidate tags.
     annual_series = sorted [(end_year, value)] (latest filing wins on collision);
-    partial = the most-recent in-progress-year tuple across tags."""
-    best = {}            # end_year -> (filing_fy, value)
+    partial = the most-recent in-progress-year tuple across tags;
+    ends = {end_year: period_end_iso_date} (latest filing wins), for pricing P/E."""
+    best = {}            # end_year -> (filing_fy, value, end_date)
     best_partial = None  # (year, value, n_quarters, is_flow)
     for c in candidates:
         tax, concept = c.split(":", 1) if ":" in c else ("us-gaap", c)
@@ -552,15 +553,16 @@ async def _concept_data(session, cik, candidates):
                 continue
             ffy = it.get("fy") or yr
             if yr not in best or ffy > best[yr][0]:
-                best[yr] = (ffy, it["val"])
+                best[yr] = (ffy, it["val"], it.get("end"))
         p = _partial_from_entries(entries, [])   # validity checked after merge
         if p and (best_partial is None or p[0] > best_partial[0]
                   or (p[0] == best_partial[0] and (p[2] or 0) > (best_partial[2] or 0))):
             best_partial = p
-    annual = sorted((yr, v) for yr, (ffy, v) in best.items())
+    annual = sorted((yr, v) for yr, (ffy, v, _e) in best.items())
+    ends = {yr: e for yr, (ffy, v, e) in best.items() if e}
     if best_partial and annual and best_partial[0] <= max(y for y, _ in annual):
         best_partial = None      # not actually a new in-progress year
-    return annual, best_partial
+    return annual, best_partial, ends
 
 
 SA_ETF_HOLD = "https://stockanalysis.com/api/symbol/e/{t}/holdings"
@@ -608,6 +610,17 @@ async def fetch_institutional_holders(session, ticker, top=15):
         return None
 
 
+def _close_on_or_before(bars, iso_date):
+    """Closing price of the last bar on or before iso_date (bars sorted ascending)."""
+    px = None
+    for b in bars:
+        if b.get("t") and b["t"] <= iso_date:
+            px = b.get("c")
+        else:
+            break
+    return px
+
+
 async def fetch_financials(session, ticker, years=None):
     cik_map = await _load_cik_map(session)
     cik = cik_map.get(ticker.upper())
@@ -616,14 +629,17 @@ async def fetch_financials(session, ticker, years=None):
     # fetch every concept once: annual history + current partial year
     raw, partials = {}, {}
     all_years = set()
+    eps_ends = {}        # fiscal-year -> period-end date, for pricing historical P/E
     for name, concepts in STATEMENTS:
         for label, cands in concepts.items():
-            annual, partial = await _concept_data(session, cik, cands)
+            annual, partial, ends = await _concept_data(session, cik, cands)
             if annual:
                 raw[(name, label)] = annual
                 all_years.update(y for y, _ in annual)
             if partial:
                 partials[(name, label)] = partial
+            if name == "INCOME STATEMENT" and label == "Dil. EPS":
+                eps_ends = ends
     if not all_years and not partials:
         return None
     # `years=None` -> all available history; otherwise the most recent N years
@@ -645,6 +661,23 @@ async def fetch_financials(session, ticker, years=None):
             vals.append((pcol, p[1]))
         return vals
 
+    # historical P/E = fiscal-year-end price / diluted EPS, per annual year
+    pe_series = []
+    eps_raw = dict(raw.get(("INCOME STATEMENT", "Dil. EPS")) or [])
+    if eps_raw and eps_ends:
+        try:
+            bars = await fetch_history(session, ticker, "ALL")
+        except Exception:
+            bars = []
+        for yr in sorted(window):
+            eps = eps_raw.get(yr)
+            end = eps_ends.get(yr)
+            if not eps or eps <= 0 or not end or not bars:
+                continue
+            px = _close_on_or_before(bars, end)
+            if px:
+                pe_series.append((yr, px / eps))
+
     statements = []
     for name, concepts in STATEMENTS:
         metrics = {}
@@ -652,6 +685,8 @@ async def fetch_financials(session, ticker, years=None):
             vals = with_partial(name, label, raw.get((name, label)))
             if vals:
                 metrics[label] = vals
+        if name == "INCOME STATEMENT" and pe_series:
+            metrics["P/E (yr-end)"] = pe_series   # right after Dil. EPS
         if name == "CASH FLOW":
             if "Operating CF" in metrics and "CapEx" in metrics:
                 capex = dict(metrics["CapEx"])
@@ -875,11 +910,16 @@ async def fetch_article(session, url):
     """Resolve (if needed), fetch and extract an article. Returns
     {url, title, paragraphs, paywalled}. paragraphs is [] if nothing readable."""
     real = await _resolve_google_news(session, url)
+    # A throwaway session with generous header limits: many publishers (Yahoo,
+    # etc.) send huge CSP headers that blow past aiohttp's 8190-byte default and
+    # would otherwise raise 400 "Got more than 8190 bytes" and kill the reader.
     try:
-        async with session.get(real, headers=UA, allow_redirects=True,
-                               timeout=aiohttp.ClientTimeout(total=12)) as r:
-            html_text = await r.text()
-            real = str(r.url)
+        async with aiohttp.ClientSession(max_line_size=65536,
+                                         max_field_size=65536) as fs:
+            async with fs.get(real, headers=UA, allow_redirects=True,
+                              timeout=aiohttp.ClientTimeout(total=12)) as r:
+                html_text = await r.text()
+                real = str(r.url)
     except Exception:
         return {"url": real, "title": "", "paragraphs": [], "paywalled": False}
     title, paras = _extract_article(html_text)

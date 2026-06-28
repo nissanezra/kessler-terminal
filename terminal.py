@@ -400,12 +400,15 @@ def render_financials(sym, fin):
             d = dict(series)
             emph = label == "Free Cash Flow"
             pct = label == "Payout Ratio"
+            pe = label == "P/E (yr-end)"
             cells = [Text("--" if d.get(y) is None else
-                          (f"{d[y]:.0f}%" if pct else _fmt_money(d[y])),
+                          (f"{d[y]:.0f}%" if pct else
+                           f"{d[y]:.1f}x" if pe else _fmt_money(d[y])),
                           style="bold cyan" if emph else "white") for y in years]
             t.add_row(Text(label, style="bold cyan" if emph else AMBER), *cells)
         blocks += [t, Text("")]
-    src = "  Source: SEC EDGAR XBRL · Free Cash Flow = Operating CF − CapEx"
+    src = ("  Source: SEC EDGAR XBRL · Free Cash Flow = Operating CF − CapEx"
+           " · P/E (yr-end) = fiscal-year-end close ÷ diluted EPS")
     if pcol:
         src += (f" · {pcol}·{pnq}Q = current year, {pnq} quarter(s) filed "
                 "(flows year-to-date; balance-sheet as of latest quarter)")
