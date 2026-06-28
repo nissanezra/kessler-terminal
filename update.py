@@ -13,7 +13,9 @@ import ssl
 import sys
 import urllib.request
 
-REPO_BASE = "https://raw.githubusercontent.com/nissanezra/kessler-terminal/main/"
+REPO = "nissanezra/kessler-terminal"
+RAW_MAIN = f"https://raw.githubusercontent.com/{REPO}/main/"
+API_COMMIT = f"https://api.github.com/repos/{REPO}/commits/main"
 HERE = os.path.dirname(os.path.abspath(__file__))
 VFILE = os.path.join(HERE, ".appversion")
 
@@ -37,6 +39,23 @@ def _local_version():
         return int(open(VFILE).read().strip())
     except Exception:
         return 0
+
+
+def _resolve_base():
+    """Freshness-safe base URL for fetching repo files.
+
+    GitHub's raw CDN caches the branch HEAD for ~5 min, so a just-pushed update
+    can keep looking 'up to date' for several minutes (raw ignores cache-busting
+    query strings and no-cache headers). Resolve the current commit SHA via the
+    API and pin raw URLs to it — SHA URLs are immutable, so they're never stale.
+    Falls back to the (possibly cached) branch URL if the API is unreachable."""
+    try:
+        sha = json.loads(_get(API_COMMIT)).get("sha")
+        if sha:
+            return f"https://raw.githubusercontent.com/{REPO}/{sha}/"
+    except Exception as e:
+        print(f"  update: SHA resolve failed, using branch — {e}")
+    return RAW_MAIN
 
 
 def _ensure_wezterm_config():
@@ -80,8 +99,9 @@ def _ensure_deps():
 def main():
     _ensure_wezterm_config()                 # every launch: keep the render config in place
     _ensure_deps()
+    base = _resolve_base()                    # SHA-pinned when possible, never stale
     try:
-        manifest = json.loads(_get(REPO_BASE + "version.json"))
+        manifest = json.loads(_get(base + "version.json"))
     except Exception as e:
         print(f"  update: skipped (offline?) — {e}")
         return
@@ -96,7 +116,7 @@ def main():
         if not fn or "/" in fn or "\\" in fn or fn.startswith("."):  # safety: bare names only
             continue
         try:
-            data = _get(REPO_BASE + fn)
+            data = _get(base + fn)
             tmp = os.path.join(HERE, fn + ".new")
             with open(tmp, "wb") as f:
                 f.write(data)
