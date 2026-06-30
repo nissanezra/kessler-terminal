@@ -707,19 +707,69 @@ async def fetch_financials(session, ticker, years=None):
              "partial_nq": pnq} if statements else None)
 
 
-async def fetch_pe_history(session, ticker, n=12):
-    """Year-by-year P/E = fiscal-year-end close / diluted EPS. Returns a list of
-    (year, pe) (oldest first, last `n` years), or [] if unavailable (ETFs, no SEC
-    data, loss years skipped). Lighter than fetch_financials: just EPS + prices."""
+async def _eps_split_adjusted(session, cik):
+    """Diluted EPS per fiscal year, adjusted for stock splits that SEC's older
+    filings don't reflect. Splits are detected from EPS restatement overlaps: when
+    a year's reported EPS drops by a clean integer ratio between two filings, that's
+    a split (e.g. AAPL FY2018 11.91 -> 2.98 = 4:1). Returns {year: (eps, end_date)}
+    on a current, fully split-adjusted basis so it lines up with adjusted prices."""
+    per_year = {}        # year -> list of (filed, val, end)
+    for tax, concept in (("us-gaap", "EarningsPerShareDiluted"),
+                         ("ifrs-full", "DilutedEarningsLossPerShare")):
+        try:
+            async with session.get(SEC_CONCEPT.format(cik=cik, tax=tax, c=concept),
+                                   headers=SEC_UA,
+                                   timeout=aiohttp.ClientTimeout(total=12)) as r:
+                if r.status != 200:
+                    continue
+                data = await r.json(content_type=None)
+        except Exception:
+            continue
+        units = data.get("units", {})
+        key = next(iter(units), None)
+        if not key:
+            continue
+        for it in units[key]:
+            yr = _annual_year(it)
+            filed, val = it.get("filed"), it.get("val")
+            if yr is None or not filed or val in (None, 0):
+                continue
+            per_year.setdefault(yr, []).append((filed, float(val), it.get("end")))
+        if per_year:
+            break        # prefer us-gaap; fall back to IFRS only if it had nothing
+    if not per_year:
+        return {}
+    # detect splits: a clean >1.5x drop in a year's EPS between successive filings
+    splits = set()       # (filed_date_of_post_split_filing, factor)
+    for entries in per_year.values():
+        es = sorted(set(entries))
+        for (_f1, v1, _e1), (f2, v2, _e2) in zip(es, es[1:]):
+            if v2 > 0 and v1 / v2 > 1.5:
+                ratio = v1 / v2
+                nice = round(ratio)
+                if nice in (2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 30) and abs(ratio - nice) < 0.2:
+                    splits.add((f2, float(nice)))
+    out = {}
+    for yr, entries in per_year.items():
+        filed, val, end = max(entries)            # latest filing (most restated)
+        factor = 1.0
+        for sf, fac in splits:                    # apply splits filed AFTER this value
+            if sf > filed:
+                factor *= fac
+        out[yr] = (val / factor, end)
+    return out
+
+
+async def fetch_pe_history(session, ticker, n=30):
+    """Year-by-year P/E = fiscal-year-end close / split-adjusted diluted EPS.
+    Returns [(year, pe)] (oldest first, last `n` years), or [] if unavailable
+    (ETFs, no SEC data, loss years skipped)."""
     cik_map = await _load_cik_map(session)
     cik = cik_map.get(ticker.upper())
     if not cik:
         return []
-    annual, _partial, ends = await _concept_data(
-        session, cik, ["EarningsPerShareDiluted",
-                       "ifrs-full:DilutedEarningsLossPerShare"])
-    eps = dict(annual or [])
-    if not eps or not ends:
+    eps = await _eps_split_adjusted(session, cik)
+    if not eps:
         return []
     try:
         bars = await fetch_history(session, ticker, "ALL")
@@ -729,7 +779,7 @@ async def fetch_pe_history(session, ticker, n=12):
         return []
     out = []
     for yr in sorted(eps):
-        e, end = eps.get(yr), ends.get(yr)
+        e, end = eps[yr]
         if not e or e <= 0 or not end:
             continue
         px = _close_on_or_before(bars, end)

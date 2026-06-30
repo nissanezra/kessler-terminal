@@ -1505,7 +1505,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         await self._load_chart(ticker, "des", custom)
         # P/E history by fiscal year (best-effort; appended so the page shows fast)
         try:
-            peh = render_pe_history(await td.fetch_pe_history(self.session, ticker))
+            peh = render_pe_history(await td.fetch_pe_history(self.session, ticker, n=30))
             if peh is not None and self.mode == "des" and self.cur_symbol == ticker:
                 self.top().update(Group(render_fundamentals(fund), peh))
         except Exception:
