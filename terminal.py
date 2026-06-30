@@ -1514,9 +1514,18 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self.top().update(Text(f"  No data for '{ticker}'.", style=RED)); return
         self.top().update(render_fundamentals(fund))
         await self._load_chart(ticker, "des", custom)
-        # P/E history by fiscal year (best-effort; appended so the page shows fast)
+        # P/E history (best-effort, appended): index P/E for indexes (e.g. SPX, which
+        # DOES have CNBC fundamentals), else per-stock split-adjusted P/E.
         try:
-            peh = render_pe_history(await td.fetch_pe_history(self.session, ticker, n=30))
+            idx = td.resolve_index(ticker)
+            if idx:
+                ser = await td.fetch_index_pe(self.session, ticker)
+                peh = render_pe_history(
+                    ser[-26:], label=f"{idx[2].split('·')[0].strip()} P/E",
+                    note=f"trailing P/E (annual) · multpl.com · since {ser[0][0]}"
+                ) if ser else None
+            else:
+                peh = render_pe_history(await td.fetch_pe_history(self.session, ticker, n=30))
             if peh is not None and self.mode == "des" and self.cur_symbol == ticker:
                 self.top().update(Group(render_fundamentals(fund), peh))
         except Exception:
