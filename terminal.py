@@ -412,6 +412,23 @@ def render_fundamentals(fund):
     return Group(head, Text(""), grid)
 
 
+def render_pe_history(series):
+    """Compact two-row table: fiscal years across the top, P/E (yr-end) below."""
+    if not series:
+        return None
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style=f"bold {AMBER}", justify="left")
+    for _ in series:
+        grid.add_column(justify="right")
+    yr_row = [Text("P/E (yr-end)", style=f"bold {AMBER}")] + \
+             [Text(str(y), style=DIM) for y, _ in series]
+    pe_row = [Text("")] + [Text(f"{p:.1f}x", style="white") for _, p in series]
+    grid.add_row(*yr_row)
+    grid.add_row(*pe_row)
+    return Group(Text(""), grid,
+                 Text("  fiscal-year-end close ÷ diluted EPS · SEC", style=DIM))
+
+
 def _fmt_money(v):
     if v is None:
         return "--"
@@ -1486,6 +1503,13 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self.top().update(Text(f"  No data for '{ticker}'.", style=RED)); return
         self.top().update(render_fundamentals(fund))
         await self._load_chart(ticker, "des", custom)
+        # P/E history by fiscal year (best-effort; appended so the page shows fast)
+        try:
+            peh = render_pe_history(await td.fetch_pe_history(self.session, ticker))
+            if peh is not None and self.mode == "des" and self.cur_symbol == ticker:
+                self.top().update(Group(render_fundamentals(fund), peh))
+        except Exception:
+            pass
         try:
             news = await td.fetch_news(self.session, ticker, 6)
             self._link_urls, self._news_meta = [], []

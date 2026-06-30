@@ -707,6 +707,37 @@ async def fetch_financials(session, ticker, years=None):
              "partial_nq": pnq} if statements else None)
 
 
+async def fetch_pe_history(session, ticker, n=12):
+    """Year-by-year P/E = fiscal-year-end close / diluted EPS. Returns a list of
+    (year, pe) (oldest first, last `n` years), or [] if unavailable (ETFs, no SEC
+    data, loss years skipped). Lighter than fetch_financials: just EPS + prices."""
+    cik_map = await _load_cik_map(session)
+    cik = cik_map.get(ticker.upper())
+    if not cik:
+        return []
+    annual, _partial, ends = await _concept_data(
+        session, cik, ["EarningsPerShareDiluted",
+                       "ifrs-full:DilutedEarningsLossPerShare"])
+    eps = dict(annual or [])
+    if not eps or not ends:
+        return []
+    try:
+        bars = await fetch_history(session, ticker, "ALL")
+    except Exception:
+        bars = []
+    if not bars:
+        return []
+    out = []
+    for yr in sorted(eps):
+        e, end = eps.get(yr), ends.get(yr)
+        if not e or e <= 0 or not end:
+            continue
+        px = _close_on_or_before(bars, end)
+        if px:
+            out.append((yr, px / e))
+    return out[-n:]
+
+
 # ---------------------------------------------------------------------------
 # News (RSS)
 # ---------------------------------------------------------------------------
