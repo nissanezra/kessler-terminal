@@ -924,7 +924,7 @@ def _app_title():
             return t
     except Exception:
         pass
-    return "KATZNELSON COMPANY TERMINAL"
+    return "KESSLER-KATZNELSON TERMINAL"
 
 
 def _live(ticker):
@@ -995,7 +995,8 @@ HELP = """\
 
    ADD NVDA                 add a ticker — then pick which section it goes in
    ADD NVDA STOCKS          add straight into a named section (skip the prompt)
-   DEL NVDA                 remove a ticker from the monitor
+   DEL NVDA                 remove ANY ticker from the monitor (built-in or added)
+   DEL GOLD · SHOW GOLD     hide a built-in row, then SHOW to bring it back
 
    PORT                     your portfolio: capital, allocation, live income
    MON / HOME               live market monitor      Esc   back to monitor
@@ -1440,10 +1441,21 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             return
         if cmd in ("ADD", "+", "WATCH"):
             await self._add_ticker(parts[1:]); return
-        if cmd in ("DEL", "RM", "REMOVE", "-", "UNWATCH"):
+        if cmd in ("DEL", "RM", "REMOVE", "-", "UNWATCH", "HIDE"):
+            done = []
             for tk in parts[1:]:
-                dash.remove_ticker(tk)
-            self._rebuild_pool(); self.action_go_monitor(); return
+                if not dash.remove_ticker(tk):     # not a user-add -> hide the built-in row
+                    dash.hide_ticker(tk)
+                done.append(tk.upper())
+            self._rebuild_pool(); self.action_go_monitor()
+            if done:
+                self.notify(f"Removed {', '.join(done)} — SHOW {done[0]} to restore")
+            return
+        if cmd in ("SHOW", "UNHIDE", "RESTORE"):
+            any_restored = any(dash.unhide_ticker(tk) for tk in parts[1:])
+            self._rebuild_pool(); self.action_go_monitor()
+            self.notify("Restored." if any_restored else "Nothing hidden to restore.")
+            return
 
         ticker = cmd
         rest = parts[1:]
@@ -1544,6 +1556,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self.notify("Usage: ADD <TICKER>  (then pick a section)")
             return
         tk = parts[0].upper()
+        dash.unhide_ticker(tk)        # re-adding a previously-hidden ticker un-hides it
         section_arg = " ".join(parts[1:]).strip() if len(parts) > 1 else ""
         # validate the ticker first
         fund = await td.fetch_fundamentals(self.session, tk)

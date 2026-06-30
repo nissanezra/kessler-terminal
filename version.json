@@ -1,10 +1,11 @@
 {
-  "version": 24,
+  "version": 25,
   "files": [
     "terminal.py",
     "dashboard.py",
     "terminal_data.py",
     "chart_render.py",
-    "update.py"
+    "update.py",
+    "appname.txt"
   ]
 }

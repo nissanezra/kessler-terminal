@@ -232,6 +232,51 @@ def _save_adds():
         pass
 
 
+# ---- hidden tickers (DEL hides any monitor row, built-in or added) ----------
+# Persisted per-install (so the Mac and Robert's build hide independently).
+HIDE_FILE = Path(__file__).resolve().parent / "hidden.json"
+
+
+def _load_hidden():
+    try:
+        return {str(t).upper() for t in json.loads(HIDE_FILE.read_text())}
+    except Exception:
+        return set()
+
+
+HIDDEN = _load_hidden()
+
+
+def _save_hidden():
+    try:
+        HIDE_FILE.write_text(json.dumps(sorted(HIDDEN)))
+    except Exception:
+        pass
+
+
+def hide_ticker(ticker):
+    t = ticker.upper().strip()
+    if t:
+        HIDDEN.add(t); _save_hidden()
+    return t
+
+
+def unhide_ticker(ticker):
+    t = ticker.upper().strip()
+    if t in HIDDEN:
+        HIDDEN.discard(t); _save_hidden(); return True
+    return False
+
+
+def _row_hidden(r):
+    """A monitor row matches the hidden set by its symbol, its label, or any word
+    in its label (so DEL GOLD hides the '@GC.1' row labelled 'GOLD')."""
+    if not HIDDEN:
+        return False
+    names = {str(r[1]).upper(), str(r[0]).upper()} | set(str(r[0]).upper().split())
+    return bool(names & HIDDEN)
+
+
 def addable_sections():
     """Section titles a stock/ETF/crypto can be filed under (ticker sections)."""
     out = []
@@ -602,6 +647,9 @@ def _click_cmd(sym, provider="cnbc"):
 
 
 def render_section(title, rows, provider="cnbc"):
+    rows = [r for r in rows if not _row_hidden(r)]   # DEL'd tickers drop out
+    if not rows:
+        return None                                  # whole section hidden -> skip it
     t = Table.grid(padding=(0, 1), expand=True)
     t.add_column(justify="left", no_wrap=True, ratio=4)    # label
     t.add_column(justify="right", no_wrap=True, ratio=4)   # price
@@ -705,11 +753,15 @@ def render():
     for col, title, _prov, rows in SECTIONS:
         extra = [(t, t) for t in USER_ADDS.get(title, [])]   # user adds, appended
         used.add(title)
-        columns[col].append(render_section(title, list(rows) + extra, _prov))
+        sec = render_section(title, list(rows) + extra, _prov)
+        if sec is not None:                                  # None = all rows hidden
+            columns[col].append(sec)
     # any custom sections that aren't part of the built-in layout -> column 0 top
     for title, ts in USER_ADDS.items():
         if title not in used and ts:
-            columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
+            sec = render_section(title, [(t, t) for t in ts], "cnbc")
+            if sec is not None:
+                columns[0].insert(0, sec)
 
     # Bloomberg headlines (shipped builds only) fill the lower-right free area
     if PACKAGED_BUILD and BLOOMBERG_HEADLINES:
