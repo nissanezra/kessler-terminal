@@ -185,10 +185,23 @@ for _col, _title, _prov, _rows in SECTIONS:
 
 
 # Packaged/distributed builds carry an appname.txt (e.g. Robert's "KESSLER
-# TERMINAL"); the Mac dev copy has none. In packaged builds the old per-section
-# watchlist + ADD/pick flow is hidden — it's being replaced by a new sector-based
-# add. The dev copy keeps the watchlist working.
+# TERMINAL"); the Mac dev copy has none. Used to tailor the shipped build —
+# currently: the Bloomberg headlines block, and Bloomberg-style Treasury-futures
+# labels (Robert is used to the Bloomberg terminal's duration naming).
 PACKAGED_BUILD = (Path(__file__).resolve().parent / "appname.txt").exists()
+
+# In the shipped build, relabel the Treasury futures by their Bloomberg duration
+# convention so they read like Robert's Bloomberg watchlist. Same contracts/data,
+# just the displayed name: TY's CTD ~7yr -> "7Y"; Ultra-10Y (UXY) is the true 10Y.
+# (The Mac dev copy keeps the conventional names defined in SECTIONS.)
+_BLOOMBERG_FUT_LABELS = {
+    "@TU.1": "2Y (TU)", "@FV.1": "5Y (FV)", "@TY.1": "7Y (TY)",
+    "@TN.1": "10Y (UXY)", "@US.1": "18Y (US)",
+}
+if PACKAGED_BUILD:
+    for _sym, _lbl in _BLOOMBERG_FUT_LABELS.items():
+        if _sym in STATE:
+            STATE[_sym].label = _lbl
 
 
 # ---- user-added tickers, filed PER SECTION (persisted, editable) -----------
