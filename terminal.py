@@ -23,7 +23,7 @@ import asyncio
 import json
 import os
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import aiohttp
@@ -1025,6 +1025,7 @@ class MarketTerminal(App):
         self.cur_display = ""
         self.tf = "1Y"
         self.cur_bars = []
+        self.cur_warmup = []        # closes before the window, for fully-formed SMA/RSI
         self.cur_mode = "des"
         self.cur_tf_label = "1Y"
         self.cur_hover = None
@@ -1127,7 +1128,8 @@ class MarketTerminal(App):
         w_px, h_px = self._chart_px(self.cur_mode)
         img, _ = await asyncio.to_thread(
             chart_render.render_chart_png, self.cur_display, self.cur_tf_label,
-            self.cur_bars, self.cur_mode, w_px, h_px, self.show_indicators, True)
+            self.cur_bars, self.cur_mode, w_px, h_px, self.show_indicators, True,
+            self.cur_warmup)
         buf = io.BytesIO(); img.save(buf, format="PNG")
         return buf.getvalue()
 
@@ -1607,7 +1609,25 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self.cur_mode = mode
         self.cur_hover = None
         self.cur_tf_label = tf_label
+        self.cur_warmup = await self._fetch_warmup(ticker, mode, tf_label, bars)
         await self._render_chart_image()
+
+    async def _fetch_warmup(self, ticker, mode, tf_label, bars):
+        """~1yr of closes BEFORE the window so SMA/RSI are fully formed across it.
+        Only for the full chart (GP); skipped for intraday and the DES mini-chart."""
+        if mode != "chart" or tf_label == "1D" or not bars:
+            return []
+        try:
+            d0 = datetime.fromisoformat(str(bars[0]["t"])[:10])
+        except (ValueError, KeyError, TypeError):
+            return []
+        wfrom = (d0 - timedelta(days=365)).strftime("%Y-%m-%d")
+        wto = (d0 - timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            wbars = await td.fetch_history(self.session, ticker, custom=(wfrom, wto))
+            return [b["c"] for b in (wbars or [])]
+        except Exception:
+            return []
 
     def _chart_to_browser(self, img):
         """Pop-out mode: write the chart PNG into an auto-refreshing HTML page and
@@ -1679,7 +1699,8 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         w_px, h_px = self._chart_px(self.cur_mode)
         img, geom = await asyncio.to_thread(
             chart_render.render_chart_png, self.cur_display, self.cur_tf_label,
-            self.cur_bars, self.cur_mode, w_px, h_px, self.show_indicators)
+            self.cur_bars, self.cur_mode, w_px, h_px, self.show_indicators, False,
+            self.cur_warmup)
         self.cur_base_img = img
         self.cur_geom = geom
         self._publish_chart(img)

@@ -123,9 +123,11 @@ def _nan(seq):
 
 
 def render_chart_png(symbol, tf, bars, mode="chart", w_px=1600, h_px=900,
-                     indicators=True, light=False):
+                     indicators=True, light=False, warmup=None):
     """Return a PIL.Image of the chart. indicators=False -> clean price-only.
-    light=True renders a white-background (printer-friendly) version."""
+    light=True renders a white-background (printer-friendly) version.
+    warmup = close prices immediately BEFORE bars[0]; used so SMA/RSI are fully
+    formed across the whole picked timeframe instead of warming up inside it."""
     # local palette shadows the module dark theme; light theme for printing
     BG, GRID, FG, C_PRICE, C_SMA50, C_SMA100, C_SMA200, C_RSI, C_AMBER, C_UP, C_DOWN = (
         ("#ffffff", "#d9d9d9", "#555555", "#111111", "#b38f00", "#1a8f54",
@@ -139,6 +141,12 @@ def render_chart_png(symbol, tf, bars, mode="chart", w_px=1600, h_px=900,
         img = Image.new("RGB", (w_px, h_px), BG)
         return img, None
     x = np.arange(n)
+    # indicator source = warmup closes (before the window) + window closes, so the
+    # trailing SMA/RSI are correct at every visible date; then slice back to window.
+    _isrc = (warmup or []) + closes
+    _ioff = len(warmup or [])
+    def _ma(p): return _nan(td.sma(_isrc, p)[_ioff:])
+    def _rs(p): return _nan(td.rsi(_isrc, p)[_ioff:])
     last, first = closes[-1], closes[0]
     chg = (last / first - 1) * 100 if first else 0
     full = (mode == "chart") and indicators
@@ -163,9 +171,9 @@ def render_chart_png(symbol, tf, bars, mode="chart", w_px=1600, h_px=900,
     # price + moving averages
     ax.plot(x, closes, color=C_PRICE, lw=1.4, label="Price")
     if full:
-        ax.plot(x, _nan(td.sma(closes, 50)), color=C_SMA50, lw=1.1, label="SMA 50")
-        ax.plot(x, _nan(td.sma(closes, 100)), color=C_SMA100, lw=1.1, label="SMA 100")
-        ax.plot(x, _nan(td.sma(closes, 200)), color=C_SMA200, lw=1.1, label="SMA 200")
+        ax.plot(x, _ma(50), color=C_SMA50, lw=1.1, label="SMA 50")
+        ax.plot(x, _ma(100), color=C_SMA100, lw=1.1, label="SMA 100")
+        ax.plot(x, _ma(200), color=C_SMA200, lw=1.1, label="SMA 200")
         leg = ax.legend(loc="upper left", facecolor=BG, edgecolor=GRID,
                         labelcolor="#cccccc", fontsize=10, framealpha=0.6)
     ax.margins(x=0.005)
@@ -201,7 +209,7 @@ def render_chart_png(symbol, tf, bars, mode="chart", w_px=1600, h_px=900,
 
     # RSI panel
     if full:
-        rsi = _nan(td.rsi(closes, 14))
+        rsi = _rs(14)
         axr.plot(x, rsi, color=C_RSI, lw=1.2)
         axr.axhline(70, color="#555", lw=0.8, ls="--")
         axr.axhline(30, color="#555", lw=0.8, ls="--")
