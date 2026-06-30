@@ -412,21 +412,21 @@ def render_fundamentals(fund):
     return Group(head, Text(""), grid)
 
 
-def render_pe_history(series):
-    """Compact two-row table: fiscal years across the top, P/E (yr-end) below."""
+def render_pe_history(series, label="P/E (yr-end)",
+                      note="fiscal-year-end close ÷ diluted EPS · SEC"):
+    """Compact two-row table: years across the top, P/E below."""
     if not series:
         return None
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style=f"bold {AMBER}", justify="left")
     for _ in series:
         grid.add_column(justify="right")
-    yr_row = [Text("P/E (yr-end)", style=f"bold {AMBER}")] + \
+    yr_row = [Text(label, style=f"bold {AMBER}")] + \
              [Text(str(y), style=DIM) for y, _ in series]
     pe_row = [Text("")] + [Text(f"{p:.1f}x", style="white") for _, p in series]
     grid.add_row(*yr_row)
     grid.add_row(*pe_row)
-    return Group(Text(""), grid,
-                 Text("  fiscal-year-end close ÷ diluted EPS · SEC", style=DIM))
+    return Group(Text(""), grid, Text(f"  {note}", style=DIM))
 
 
 def _fmt_money(v):
@@ -1496,8 +1496,19 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self.top().update(Text(f"  Loading {ticker} …", style=DIM))
         fund = await td.fetch_fundamentals(self.session, ticker)
         if not fund:
-            # rates/indices/credit/crypto have no stock fundamentals — chart them
-            if td.resolve_fred(ticker) or td.resolve_index(ticker) or td.is_crypto(ticker):
+            idx = td.resolve_index(ticker)
+            # S&P 500 index page: show its long P/E history above the chart
+            ipe = await td.fetch_index_pe(self.session, ticker) if idx else []
+            if ipe:
+                self.mode = "des"; self._show_only("top", "chart")
+                self.top().update(render_pe_history(
+                    ipe[-26:], label=f"{idx[2].split('·')[0].strip()} P/E",
+                    note="trailing P/E (annual) · multpl.com · full history since "
+                         f"{ipe[0][0]}"))
+                await self._load_chart(ticker, "des", custom)
+                return
+            # rates/other indices/credit/crypto have no fundamentals — chart them
+            if td.resolve_fred(ticker) or idx or td.is_crypto(ticker):
                 await self.show_chart(ticker, custom); return
             self._show_only("top")
             self.top().update(Text(f"  No data for '{ticker}'.", style=RED)); return

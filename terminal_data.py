@@ -707,6 +707,35 @@ async def fetch_financials(session, ticker, years=None):
              "partial_nq": pnq} if statements else None)
 
 
+MULTPL_SP500_PE = "https://www.multpl.com/s-p-500-pe-ratio/table/by-year"
+
+
+async def fetch_index_pe(session, ticker):
+    """Annual P/E history for a stock index. Only the S&P 500 has a free long
+    history (multpl.com, trailing P/E back to 1871); other indexes return [].
+    Returns [(year, pe)] oldest-first."""
+    idx = resolve_index(ticker)
+    label = f"{idx[2] if idx else ''} {ticker.upper()}"
+    is_sp500 = ("S&P 500" in label or
+                ticker.upper() in ("SPX", "SP500", "GSPC", ".SPX", "SPX500", "SPY"))
+    if not is_sp500:
+        return []
+    try:
+        async with session.get(MULTPL_SP500_PE, headers=UA,
+                               timeout=aiohttp.ClientTimeout(total=15)) as r:
+            html = await r.text()
+    except Exception:
+        return []
+    seen = {}
+    for m in re.finditer(
+            r"<td>\s*[A-Za-z]{3} \d{1,2}, (\d{4})\s*</td>\s*<td>(.*?)</td>", html, re.S):
+        yr = int(m.group(1))
+        nums = re.findall(r"[0-9]+\.[0-9]+", re.sub(r"<[^>]+>", "", m.group(2)))
+        if nums and yr not in seen:        # newest row per year wins
+            seen[yr] = float(nums[0])
+    return sorted(seen.items())
+
+
 async def _eps_split_adjusted(session, cik):
     """Diluted EPS per fiscal year, adjusted for stock splits that SEC's older
     filings don't reflect. Splits are detected from EPS restatement overlaps: when
