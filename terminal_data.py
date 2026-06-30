@@ -784,6 +784,9 @@ NEWS_SECTIONS = [
     ("BLOOMBERG", "google", "site:bloomberg.com markets OR economy OR stocks"),
     ("MARKETS", "cnbc", "15839135"),
     ("ECONOMY", "cnbc", "20910258"),
+    ("ECONOMIC RELEASES", "google",
+     'CPI OR "nonfarm payrolls" OR "jobless claims" OR JOLTS OR "retail sales" '
+     'OR "GDP report" OR PPI OR "PCE inflation" OR "unemployment rate"'),
     ("FINANCE", "cnbc", "10000664"),
     ("TECHNOLOGY", "cnbc", "19854910"),
     ("ENERGY", "cnbc", "19836768"),
