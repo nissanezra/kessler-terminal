@@ -342,6 +342,16 @@ class ChartView(Vertical):
             yield Static("–", id="dsep")
             yield Input(placeholder="MM-DD-YYYY", id="dto", max_length=10)
             yield Button("Go", id="dgo")
+        with Horizontal(id="ovlrow"):
+            yield Static("PERIOD A", id="ovllbl")
+            yield Input(placeholder="MM-DD-YYYY", id="oaf", max_length=10)
+            yield Static("–", id="osep1")
+            yield Input(placeholder="MM-DD-YYYY", id="oat", max_length=10)
+            yield Static("vs  B", id="ovllbl2")
+            yield Input(placeholder="MM-DD-YYYY", id="obf", max_length=10)
+            yield Static("–", id="osep2")
+            yield Input(placeholder="MM-DD-YYYY", id="obt", max_length=10)
+            yield Button("Go", id="ovlgo")
         yield TermImage(id="chimg")
         yield Static(id="chtext")           # text/braille chart (image-less terminals)
 
@@ -947,6 +957,8 @@ HELP = """\
    AAPL 6M                  security detail at a timeframe
    AAPL GP                  full chart: white price + SMA 50/100/200 + RSI
    CMP AAPL MSFT NVDA       compare tickers (% return) · also: AAPL VS MSFT · +CMP button
+   GDX OVL                  overlay two date ranges — opens date-picker boxes (then Go)
+   AAPL VP 1Y               quick overlay: this period vs the prior period (also YOY)
    AAPL GP 3M               chart at a timeframe
    AAPL GP 2024-01-01 2024-06-01    custom date range
    AAPL FA                  financials: income, balance sheet & cash flow (full history)
@@ -1002,6 +1014,12 @@ class MarketTerminal(App):
     #dgo { width: 6; height: 1; min-width: 4; background: #1d4d2a; color: white; border: none; }
     #chimg { height: 1fr; width: 1fr; padding: 0 1; align: center middle; }
     #daterow { display: none; height: 1; padding: 0 1; }
+    #ovlrow { display: none; height: 1; padding: 0 1; }
+    #ovllbl { width: 9; height: 1; color: orange; content-align: left middle; }
+    #ovllbl2 { width: 6; height: 1; color: orange; content-align: center middle; }
+    #oaf, #oat, #obf, #obt { width: 14; height: 1; border: none; background: #1a1a1a; color: white; }
+    #osep1, #osep2 { width: 3; height: 1; content-align: center middle; color: grey; }
+    #ovlgo { width: 6; height: 1; min-width: 4; background: #1d4d2a; color: white; border: none; }
     #bottom { padding: 0 1; height: auto; }
     #reader { height: 1fr; padding: 0 2; background: #0a0a0a; display: none; }
     #readerbody { height: auto; width: 1fr; }
@@ -1032,6 +1050,8 @@ class MarketTerminal(App):
         self.show_indicators = False   # charts open clean; IND button adds SMA/RSI
         self.cmp_symbols = []
         self._cmp_items = []
+        self._ovl = None              # dict of the active overlay's data
+        self._ovl_pending_ticker = ""  # ticker awaiting dates from the overlay picker
         self._cmp_levels = []          # compare symbols drawn on the right (rate) axis
         self.cmp_index100 = False      # compare view: % return (False) vs indexed-to-100
         self._pending_add = None       # ticker awaiting a section choice
@@ -1097,6 +1117,8 @@ class MarketTerminal(App):
             inp.focus()
         elif event.button.id == "dgo":
             self.run_worker(self._apply_date_inputs(), exclusive=True)
+        elif event.button.id == "ovlgo":
+            self.run_worker(self._apply_overlay_inputs(), exclusive=True)
         elif event.button.id == "printbtn":
             self.run_worker(self._print_screen(), exclusive=False)
 
@@ -1122,7 +1144,7 @@ class MarketTerminal(App):
 
     async def _light_chart_png(self):
         """Re-render the current chart on a white background, return PNG bytes."""
-        if not self.cur_bars or self.cur_mode == "compare":
+        if not self.cur_bars or self.cur_mode in ("compare", "overlay"):
             return None
         import io
         w_px, h_px = self._chart_px(self.cur_mode)
@@ -1205,6 +1227,39 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             await self._load_chart(self.cur_symbol, self.cur_mode or "chart", custom=(fa, ta))
         else:
             self.notify("Open a chart first (type a ticker)")
+
+    def prompt_overlay_dates(self, ticker):
+        """Show the two-range date picker for overlaying two periods of a ticker."""
+        self._ovl_pending_ticker = (ticker or self.cur_symbol or "").upper()
+        if not self._ovl_pending_ticker:
+            self.notify("Type a ticker first, e.g.  GDX OVL"); return
+        self.mode = "chart"; self._show_only("chart")
+        try:
+            self.query_one("#daterow").display = False
+            self.query_one("#ovlrow").display = True
+            self.query_one("#oaf", Input).focus()
+            self.notify(f"{self._ovl_pending_ticker}: enter two date ranges "
+                        "(MM-DD-YYYY) to overlay, then press Go or Enter")
+        except Exception:
+            pass
+
+    async def _apply_overlay_inputs(self):
+        g = lambda i: _parse_mdy(self.query_one(i, Input).value)
+        a0, a1, b0, b1 = g("#oaf"), g("#oat"), g("#obf"), g("#obt")
+        if not all((a0, a1, b0, b1)):
+            self.notify("Enter all four dates as MM-DD-YYYY", severity="error"); return
+        if a0 > a1:
+            a0, a1 = a1, a0
+        if b0 > b1:
+            b0, b1 = b1, b0
+        tk = self._ovl_pending_ticker or self.cur_symbol
+        if not tk:
+            self.notify("No ticker set for the overlay"); return
+        try:
+            self.query_one("#ovlrow").display = False
+        except Exception:
+            pass
+        await self.show_overlay(tk, ranges=[(a0, a1), (b0, b1)])
 
     async def on_mount(self):
         self.title = _app_title()
@@ -1302,6 +1357,9 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         if event.input.id in ("dfrom", "dto"):   # date boxes -> apply range, keep values
             await self._apply_date_inputs()
             return
+        if event.input.id in ("oaf", "oat", "obf", "obt"):   # overlay picker boxes
+            await self._apply_overlay_inputs()
+            return
         raw = event.value.strip()
         event.input.value = ""
         if raw:
@@ -1346,6 +1404,9 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             on = (parts[1] not in ("OFF", "0", "NO")) if len(parts) > 1 \
                 else not self._measure_on
             self.set_measure(on); return
+        if cmd in ("OVL", "OVERLAY"):       # open the two-range overlay date picker
+            self.prompt_overlay_dates(parts[1] if len(parts) > 1 else self.cur_symbol)
+            return
         if cmd in ("PORT", "PORTFOLIO", "HOLDINGS", "PNL"):
             await self.show_portfolio(); return
         if cmd in ("CMP", "COMPARE") or "VS" in parts:
@@ -1373,7 +1434,8 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         tf = self.tf
         custom = None
         if rest:
-            if rest[0] in ("GP", "CHART", "G", "FA", "FIN", "N", "NEWS", "DES"):
+            if rest[0] in ("GP", "CHART", "G", "FA", "FIN", "N", "NEWS", "DES",
+                           "VP", "PRIOR", "YOY", "ANALOG", "OVL", "OVERLAY"):
                 func = rest[0]; rest = rest[1:]
             if len(rest) >= 2 and "-" in rest[0] and "-" in rest[1]:
                 custom = (rest[0], rest[1])
@@ -1392,6 +1454,17 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
                 await self.show_news(ticker)
             elif func in ("GP", "CHART", "G"):
                 await self.show_chart(ticker, custom)
+            elif func in ("VP", "PRIOR", "YOY", "ANALOG", "OVL", "OVERLAY"):
+                dts = [t for t in rest if t.count("-") == 2]
+                if len(dts) >= 4:                 # two explicit date ranges
+                    await self.show_overlay(ticker,
+                                            ranges=[(dts[0], dts[1]), (dts[2], dts[3])])
+                elif len(dts) >= 2:               # one range vs the equal range before it
+                    await self.show_overlay(ticker, custom=(dts[0], dts[1]))
+                elif func in ("OVL", "OVERLAY"):  # no dates -> open the date picker
+                    self.prompt_overlay_dates(ticker)
+                else:                             # VP -> this tf vs prior tf
+                    await self.show_overlay(ticker, tf=tf)
             else:
                 await self.show_security(ticker, custom)
         except Exception as e:
@@ -1423,9 +1496,6 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             self.bottom().update(Text(""))
 
     async def _add_ticker(self, parts):
-        if dash.PACKAGED_BUILD:                  # watchlist/pick retired in shipped builds
-            self.notify("Adding tickers is being reworked — coming soon.")
-            return
         if not parts:
             self.notify("Usage: ADD <TICKER>  (then pick a section)")
             return
@@ -1518,6 +1588,84 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self._cmp_levels = [s for s, _ in items if td.resolve_fred(s)]
         await self._render_compare_image()
 
+    async def _prior_window(self, ticker, cur):
+        """Fetch the equal-length window immediately before `cur` (for VP overlays)."""
+        if not cur:
+            return []
+        try:
+            d0 = datetime.fromisoformat(str(cur[0]["t"])[:10])
+            d1 = datetime.fromisoformat(str(cur[-1]["t"])[:10])
+            span = max((d1 - d0).days, 1)
+            pfrom = (d0 - timedelta(days=span + 5)).strftime("%Y-%m-%d")
+            pto = (d0 - timedelta(days=1)).strftime("%Y-%m-%d")
+            return await td.fetch_history(self.session, ticker, custom=(pfrom, pto)) or []
+        except Exception:
+            return []
+
+    async def show_overlay(self, ticker, tf=None, custom=None, ranges=None):
+        """Overlay two windows of the same ticker, normalized & aligned start-to-start.
+        ranges=[(f1,t1),(f2,t2)] -> two custom date ranges; custom=(f,t) -> that range
+        vs the equal range before it; else -> this `tf` vs the prior `tf`."""
+        self.mode = "chart"
+        self.cur_mode = "overlay"
+        self._measure_on = False
+        self._show_only("chart")
+        self.cur_symbol = ticker
+        self.cur_hover = None
+        try:
+            self.query_one("#ovlrow").display = False
+        except Exception:
+            pass
+        hdr = self.chart().query_one("#chdr", ChartHeader)
+        hdr.set_content(Text(f"  building {ticker} overlay …", style=DIM), [])
+
+        def _rng(b):
+            return f"{b[0]['t'][:7]}–{b[-1]['t'][:7]}" if b else "?"
+
+        if ranges:                                  # two explicit ranges (A behind, B front)
+            (a0, a1), (b0, b1) = ranges
+            prior = await td.fetch_history(self.session, ticker, custom=(a0, a1)) or []
+            cur = await td.fetch_history(self.session, ticker, custom=(b0, b1)) or []
+            cur_name, prior_name = _rng(cur), _rng(prior)
+            self.cur_tf_label = "CUSTOM"
+        elif custom:                                # one range vs the equal range before it
+            cur = await td.fetch_history(self.session, ticker, custom=custom) or []
+            prior = await self._prior_window(ticker, cur)
+            cur_name, prior_name = _rng(cur), _rng(prior)
+            self.cur_tf_label = "CUSTOM"
+        else:                                       # this tf vs prior tf
+            tf = tf or self.tf
+            cur = await td.fetch_history(self.session, ticker, tf) or []
+            prior = await self._prior_window(ticker, cur)
+            cur_name, prior_name = f"This {tf}", f"Prior {tf}"
+            self.cur_tf_label = tf
+
+        if not cur or len(cur) < 2:
+            hdr.set_content(Text(f"  not enough data for {ticker}", style=RED), []); return
+        fr = td.resolve_fred(ticker); idx = td.resolve_index(ticker)
+        self.cur_display = fr[1] if fr else (idx[2] if idx else ticker.upper())
+        self._ovl = {"label": self.cur_display, "cur": cur, "prior": prior,
+                     "cur_name": cur_name, "prior_name": prior_name}
+        await self._render_overlay_image()
+
+    async def _render_overlay_image(self):
+        if not self._ovl:
+            return
+        o = self._ovl
+        if self._chart_text:
+            self.cur_base_img, self.cur_geom = None, None
+            self._show_chart_text("  Overlay needs image charts (use Windows Terminal).")
+            self._refresh_compare_header()
+            return
+        w_px, h_px = self._chart_px("chart")
+        img, geom = await asyncio.to_thread(
+            chart_render.render_overlay_png, o["label"], self.cur_tf_label,
+            o["cur"], o["prior"], w_px, h_px, self.cmp_index100,
+            o["cur_name"], o["prior_name"])
+        self.cur_base_img, self.cur_geom = img, geom
+        self._publish_chart(img)
+        self._refresh_compare_header()
+
     def _chart_cells(self):
         """Chart area size in CHARACTER cells (for text/plotext charts)."""
         cols = max(self.app.size.width - 4, 60)
@@ -1552,11 +1700,14 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self._refresh_compare_header()
 
     async def toggle_index100(self):
-        if self.cur_mode != "compare":
+        if self.cur_mode not in ("compare", "overlay"):
             return
         self.cmp_index100 = not self.cmp_index100
         self.cur_hover = None
-        await self._render_compare_image()
+        if self.cur_mode == "overlay":
+            await self._render_overlay_image()
+        else:
+            await self._render_compare_image()
 
     def _refresh_compare_header(self):
         g = self.cur_geom
@@ -1726,7 +1877,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         frac = x_cell / widget_w
         axspan = g["x1f"] - g["x0f"] or 1
         data_f = (frac - g["x0f"]) / axspan
-        if self.cur_mode == "compare":
+        if self.cur_mode in ("compare", "overlay"):
             n = g["n"]
             idx = max(0, min(n - 1, round(data_f * (n - 1))))
         else:
@@ -1739,7 +1890,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self.cur_hover = idx
         # read-out updates live (header, no blink); the cross is drawn on the image
         # only after the pointer settles, so it doesn't blink while you move.
-        if self.cur_mode == "compare":
+        if self.cur_mode in ("compare", "overlay"):
             self._refresh_compare_header()
         else:
             self._refresh_chart_header()
@@ -1757,7 +1908,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         if g is None or idx is None or self.cur_base_img is None:
             return
         try:
-            if self.cur_mode == "compare":
+            if self.cur_mode in ("compare", "overlay"):
                 date = g["dates"][idx] if idx < len(g.get("dates", [])) else None
                 img = chart_render.draw_compare_markers(self.cur_base_img, g, idx, date)
             else:
@@ -1775,9 +1926,9 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         self._measure_on = bool(on)
         self._measure_pts = []
         if on:
-            if self.cur_mode == "compare":
+            if self.cur_mode in ("compare", "overlay"):
                 self._measure_on = False
-                self.notify("Measure works on a single chart, not compare view")
+                self.notify("Measure works on a single chart, not the overlay/compare view")
                 return
             self.notify("Measure ON — click two points on the chart to read "
                         "the price change, % move and days between them. "
@@ -1800,7 +1951,7 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
         return max(0, min(n - 1, round(g["xmin"] + data_f * (g["xmax"] - g["xmin"]))))
 
     def chart_measure_click(self, x_cell, widget_w):
-        if self.cur_mode == "compare":
+        if self.cur_mode in ("compare", "overlay"):
             return
         idx = self._measure_idx(x_cell, widget_w)
         if idx is None:
@@ -1850,11 +2001,14 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             return
         try:
             self.query_one("#daterow").display = False
+            self.query_one("#ovlrow").display = False
         except Exception:
             pass
         self.tf = tf
         if self.cur_mode == "compare":
             await self.show_compare(self.cmp_symbols, None)
+        elif self.cur_mode == "overlay" and self.cur_symbol:
+            await self.show_overlay(self.cur_symbol, tf)
         elif self.cur_symbol:
             await self._load_chart(self.cur_symbol, self.cur_mode, None)
 

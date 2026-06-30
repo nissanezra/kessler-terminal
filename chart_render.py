@@ -363,6 +363,81 @@ def render_compare_png(items, w_px=1600, h_px=900, index100=False, level_syms=No
     return Image.open(buf).convert("RGB"), geom
 
 
+def render_overlay_png(label, tf_label, cur_bars, prior_bars, w_px=1600, h_px=900,
+                       index100=False, cur_name=None, prior_name=None):
+    """Overlay two windows of the SAME instrument, each normalized to its own start
+    and aligned day-1-to-day-1 (relative time), so you can compare their shapes.
+    cur_name/prior_name label the two lines (default 'This/Prior {tf}'). Returns
+    (PIL.Image, geom) with a compare-style geom so the existing hover works."""
+    cn = cur_name or f"This {tf_label}"
+    pn = prior_name or f"Prior {tf_label}"
+    cur = [b["c"] for b in (cur_bars or [])]
+    pri = [b["c"] for b in (prior_bars or [])]
+    if len(cur) < 2:
+        return Image.new("RGB", (w_px, h_px), BG), None
+    N = len(cur)
+    pri_r = _resample_raw(pri, N) if len(pri) >= 2 else None    # align prior to N points
+
+    def _norm(vals):
+        base = vals[0] or 1
+        return ([v / base * 100 for v in vals] if index100
+                else [(v / base - 1) * 100 for v in vals])
+
+    dates = [b["t"] for b in cur_bars]
+    cur_rng = f"{cur_bars[0]['t']} -> {cur_bars[-1]['t']}"
+    pri_rng = f"{prior_bars[0]['t']} -> {prior_bars[-1]['t']}" if pri_r else "n/a"
+
+    dpi = 100
+    fig = plt.figure(figsize=(w_px / dpi, h_px / dpi), dpi=dpi, facecolor=BG)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_facecolor(BG); ax.grid(True, color=GRID, lw=0.6)
+    for sp in ax.spines.values():
+        sp.set_color(GRID)
+    ax.tick_params(colors=FG, labelsize=11)
+
+    series, handles = [], []
+    if pri_r:                                                   # prior first (behind)
+        pp = _norm(pri_r)
+        lbl = f"{pn}  {pp[-1]:.1f}" if index100 else f"{pn}  {pp[-1]:+.1f}%"
+        (lp,) = ax.plot(range(N), pp, color=COMPARE_COLORS[1], lw=1.4, label=lbl)
+        series.append({"sym": pn, "color": COMPARE_COLORS[1],
+                       "plot": pp, "pct": pp, "vals": pri_r, "axis": "left", "unit": "pct"})
+        handles.append(lp)
+    cp = _norm(cur)
+    lbl = f"{cn}  {cp[-1]:.1f}" if index100 else f"{cn}  {cp[-1]:+.1f}%"
+    (lc,) = ax.plot(range(N), cp, color=COMPARE_COLORS[0], lw=1.7, label=lbl)
+    series.append({"sym": cn, "color": COMPARE_COLORS[0],
+                   "plot": cp, "pct": cp, "vals": cur, "axis": "left", "unit": "pct"})
+    handles.append(lc)
+
+    ax.axhline(100 if index100 else 0, color="#666", lw=0.8)
+    ax.legend(handles=handles, loc="upper left", facecolor=BG, edgecolor=GRID,
+              labelcolor="#ccc", fontsize=12, framealpha=0.6)
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%g" if index100 else "%+g%%"))
+    fig.text(0.012, 0.955, f"{label}  -  {pn}  vs  {cn}",
+             color=C_AMBER, fontsize=14, weight="bold", family="monospace")
+    mode_lbl = "indexed to 100" if index100 else "% return"
+    fig.text(0.40, 0.957, f"this {cur_rng}   prior {pri_rng}   ({mode_lbl}, aligned to start)",
+             color=FG, fontsize=10, family="monospace")
+    step = max(N // 8, 1)
+    ticks = list(range(0, N, step))
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([dates[t] for t in ticks], fontsize=10)
+    fig.subplots_adjust(left=0.052, right=0.99, top=0.92, bottom=0.07)
+    fig.canvas.draw()
+    pos = ax.get_position()
+    lmin, lmax = ax.get_ylim()
+    geom = {"x0f": pos.x0, "x1f": pos.x1, "y0f": pos.y0, "y1f": pos.y1, "n": N,
+            "ymin": lmin, "ymax": lmax, "compare": True, "series": series,
+            "dates": dates, "index100": index100,
+            "axis_left": {"ymin": lmin, "ymax": lmax}, "axis_right": None}
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=BG)
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).convert("RGB"), geom
+
+
 def _hex_to_rgb(c):
     c = c.lstrip("#")
     return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))

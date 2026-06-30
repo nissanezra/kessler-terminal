@@ -689,16 +689,14 @@ def render():
     ncols = max(col for col, *_ in SECTIONS) + 1
     columns = {i: [] for i in range(ncols)}
     used = set()
-    show_adds = not PACKAGED_BUILD                          # watchlist hidden in shipped builds
     for col, title, _prov, rows in SECTIONS:
-        extra = [(t, t) for t in USER_ADDS.get(title, [])] if show_adds else []
+        extra = [(t, t) for t in USER_ADDS.get(title, [])]   # user adds, appended
         used.add(title)
         columns[col].append(render_section(title, list(rows) + extra, _prov))
     # any custom sections that aren't part of the built-in layout -> column 0 top
-    if show_adds:
-        for title, ts in USER_ADDS.items():
-            if title not in used and ts:
-                columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
+    for title, ts in USER_ADDS.items():
+        if title not in used and ts:
+            columns[0].insert(0, render_section(title, [(t, t) for t in ts], "cnbc"))
 
     # Bloomberg headlines (shipped builds only) fill the lower-right free area
     if PACKAGED_BUILD and BLOOMBERG_HEADLINES:
