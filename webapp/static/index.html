@@ -45,13 +45,20 @@
     50%{filter:drop-shadow(0 3px 16px rgba(238,199,102,.5));}}
   @media(max-width:640px){.splash-lockup{flex-direction:column;gap:14px;text-align:center;}
     .splash-k-img{width:112px;height:112px;} .splash-name{font-size:34px;white-space:normal;} .splash-tag{font-size:20px;}}
-  #titlebar{display:flex;align-items:center;gap:12px;padding:4px 10px;background:#000;
-    border-bottom:1px solid #1a1a1a;}
+  #titlebar{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;
+    padding:4px 10px;background:#000;border-bottom:1px solid #1a1a1a;}
+  #titlebar .tb-left{display:flex;align-items:center;gap:12px;min-width:0;}
+  #titlebar .navgroup{display:flex;align-items:center;gap:10px;justify-self:center;}
   #titlebar .name{color:var(--amber);font-weight:700;letter-spacing:.06em;white-space:nowrap;}
   #cmd{flex:1;background:#141414;border:1px solid #2a2a2a;color:var(--white);
     font-family:var(--mono);font-size:13px;padding:3px 8px;outline:none;}
   #cmd::placeholder{color:#555;}
-  #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;}
+  #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;justify-self:end;}
+  .navbtn{color:var(--amber);background:transparent;border:1px solid #4a3a15;
+    padding:4px 14px;cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;
+    letter-spacing:.06em;white-space:nowrap;transition:background .12s,color .12s;}
+  .navbtn:hover{background:var(--amber);color:#000;border-color:var(--amber);}
+  .navbtn:active{transform:translateY(1px);}
   .view{display:none!important;}
   .view.active{display:block!important;}
   #monitor.active{display:grid!important;}
@@ -162,6 +169,10 @@
   #rd-meta{color:var(--blue);font-size:12px;margin-bottom:12px;}
   #rd-body p{color:#e6e6e6;line-height:1.65;margin:0 0 12px;font-size:14px;}
   #rd-body .dim{color:var(--dim);}
+  /* embedded-page fallback: load the original inside the terminal, not a new tab */
+  #rd-body .rd-embedwrap{margin-top:6px;}
+  #rd-body .rd-embednote{color:var(--dim);font-size:11px;margin:0 0 6px;}
+  #rd-body .rd-frame{width:100%;height:calc(100vh - 150px);min-height:420px;border:1px solid var(--line,#333);border-radius:4px;background:#fff;}
   #rd-ext{margin-left:auto;text-decoration:none;}
   .add-btn{margin-left:auto;}
   .print-btn{margin-left:8px;}
@@ -214,9 +225,11 @@
   @media(max-width:820px){
     html,body{font-size:12px;}
     body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
-    #titlebar{flex-wrap:wrap;gap:6px 10px;}
+    #titlebar{display:flex;flex-wrap:wrap;gap:6px 10px;}
+    #titlebar .tb-left{flex:1 1 100%;flex-wrap:wrap;gap:6px 10px;}
     #titlebar .name{font-size:12px;}
-    #titlebar .clock{font-size:11px;margin-left:auto;}
+    #titlebar .navgroup{flex:1 1 100%;justify-content:center;justify-self:auto;}
+    #titlebar .clock{font-size:11px;margin-left:auto;justify-self:auto;}
     #cmd{order:5;flex:1 1 100%;padding:8px;font-size:14px;}
     #monitor{grid-template-columns:1fr!important;gap:0;padding:6px 8px;}
     .row{grid-template-columns:1fr auto auto auto;gap:10px;line-height:1.7;}
@@ -250,8 +263,15 @@
     <div class="splash-load"><span></span></div>
   </div>
   <div id="titlebar">
-    <span class="name">KESSLER-KATZNELSON TERMINAL</span>
-    <input id="cmd" placeholder="Command  (e.g. AAPL · AAPL GP 6M · AAPL FA · AAPL N · NEWS · PORT · MON)" autocomplete="off" />
+    <div class="tb-left">
+      <span class="name">KESSLER-KATZNELSON TERMINAL</span>
+      <input id="cmd" placeholder="Command  (e.g. AAPL · AAPL GP 6M · AAPL FA · AAPL N · NEWS · PORT · MON)" autocomplete="off" />
+    </div>
+    <div class="navgroup">
+      <button class="navbtn" onclick="showMonitor()">MONITOR</button>
+      <button class="navbtn" onclick="showNews(null)">NEWS</button>
+      <button class="navbtn" onclick="showResearch()">RESEARCH</button>
+    </div>
     <span class="clock" id="clock"></span>
   </div>
 
@@ -973,9 +993,18 @@ async function openArticle(elId,i){
   let a; try{a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json();}catch(e){a=null;}
   if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
   const paras=(a&&a.paragraphs)||[];
-  document.getElementById("rd-body").innerHTML = paras.length
-    ? paras.map(p=>`<p>${esc(p)}</p>`).join("")
-    : `<p class="dim">Couldn't extract the full text here${a&&a.paywalled?" (the source may be paywalled)":""}. Use “Open original ↗”.</p>`;
+  if(paras.length) document.getElementById("rd-body").innerHTML=paras.map(p=>`<p>${esc(p)}</p>`).join("");
+  else embedInReader(it.link, a&&a.paywalled);
+}
+/* When text can't be extracted, load the original page inside the reader (proxied so
+   it isn't blocked from framing) instead of kicking out to a new tab. */
+function embedInReader(url,paywalled){
+  const body=document.getElementById("rd-body");
+  if(!url){ body.innerHTML="<p class='dim'>Couldn't load this one.</p>"; return; }
+  body.innerHTML=`<div class="rd-embedwrap">`
+    +`<p class="rd-embednote">Full text couldn't be extracted${paywalled?" (may be subscriber-only)":""}, so the original page is loaded below.</p>`
+    +`<iframe class="rd-frame" src="/api/embed?url=${encodeURIComponent(url)}" `
+    +`referrerpolicy="no-referrer" sandbox="allow-scripts allow-popups allow-forms"></iframe></div>`;
 }
 function readerBack(){
   show(readerFrom==="security"?"security":readerFrom==="research"?"researchview":"newsview"); }
@@ -998,6 +1027,7 @@ async function showResearch(){
       const idx=gi++; researchItems.push(it);
       html+=`<div class="it"><span class="bull">• </span>`
         +`<span class="hl" onclick="openResearch(${idx})">${esc(it.title)}</span>`
+        +(it.author?` <span class="src">${esc(it.author)}</span>`:"")
         +(it.ext?` <span class="src">${esc(it.ext.toUpperCase())}</span>`:"")
         +(it.meta?` <span class="age">${esc(it.meta)}</span>`:"")+`</div>`;
     }
@@ -1018,14 +1048,17 @@ async function openResearch(i){
     let a; try{ a=await(await fetch(`/api/research/read?file=${encodeURIComponent(it.file)}`)).json(); }catch(e){ a=null; }
     render((a&&a.paragraphs)||[], (a&&a.paragraphs&&a.paragraphs.length)?"":`<p class="dim">Couldn't read this file${a&&a.error?` (${esc(a.error)})`:""}.</p>`);
   } else if(it.kind==="blurb"){
-    ext.style.display="none";
+    if(it.link){ ext.href=it.link; ext.style.display=""; } else ext.style.display="none";
+    if(it.author) document.getElementById("rd-meta").textContent=(it.meta||"")+(it.author?"  ·  "+it.author:"");
     render((it.body||"").split(/\n\n+/).map(x=>x.trim()).filter(Boolean),
-      `<p class="dim">Full transcript isn't available in the terminal — this is the episode summary. Save the transcript into the research/ folder to read it all here.</p>`);
+      `<p class="dim">This is the episode summary — the full transcript renders only on BMO's site. Tap “Open original ↗” above to read it there.</p>`);
   } else {   // web article — fetch full text
     ext.href=it.link||"#"; ext.style.display="";
     let a; try{ a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json(); }catch(e){ a=null; }
     if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
-    render((a&&a.paragraphs)||[], (a&&a.paragraphs&&a.paragraphs.length)?"":`<p class="dim">Couldn't extract the text${a&&a.paywalled?" (may be subscriber-only)":""}. Use “Open original ↗”.</p>`);
+    const paras=(a&&a.paragraphs)||[];
+    if(paras.length) render(paras);
+    else embedInReader(it.link, a&&a.paywalled);
   }
 }
 

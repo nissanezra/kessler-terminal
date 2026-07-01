@@ -17,7 +17,7 @@ import re
 import socket
 import sys
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
@@ -279,13 +279,84 @@ _RESEARCH_EXT = {".pdf", ".txt", ".md"}
 RESEARCH_FEEDS = [
     {"name": "Adam Taggart · Thoughtful Money",
      "url": "https://adamtaggart.substack.com/feed", "readable": True},
-    {"name": "BMO Macro Horizons · Ian Lyngen",
-     "url": "https://feeds.megaphone.fm/macrohorizons", "readable": False},
+    # BMO is handled separately by _bmo_insights_section() below: the whole Insights
+    # library (all authors, not just Macro Horizons) is pulled from BMO's sitemap and
+    # filtered to the last N days. The pages are server-rendered, so they read in-app.
 ]
+
+# All BMO Capital Markets "Insights" articles come from the sitemap (there's no RSS);
+# each <url> carries a real publish/refresh date in <lastmod>, which we use to keep the
+# last BMO_INSIGHTS_DAYS days across every author.
+BMO_SITEMAP = "https://capitalmarkets.bmo.com/sitemap.xml"
+BMO_INSIGHTS_PREFIX = "https://capitalmarkets.bmo.com/en/insights/"
+BMO_INSIGHTS_DAYS = 14
+# Slugs are lowercase; keep these tokens uppercase when rebuilding a headline.
+_BMO_ACRONYMS = {
+    "bmo", "us", "usmca", "ai", "esg", "ceo", "cfo", "cio", "reit", "reits", "svb",
+    "ccus", "cop27", "ev", "evs", "gdp", "ecb", "boc", "uk", "eu", "cad",
+    "usd", "q1", "q2", "q3", "q4", "etf", "etfs", "ipo", "sp", "tsx", "llm", "llms",
+    "esr", "ipos", "eps", "fx",
+}
+
+
+def _slug_to_title(slug):
+    words = []
+    for w in slug.split("-"):
+        if not w:
+            continue
+        words.append(w.upper() if w.lower() in _BMO_ACRONYMS else w.capitalize())
+    return " ".join(words)
+
+
+async def _bmo_insights_section(days=BMO_INSIGHTS_DAYS, limit=50):
+    """All BMO Insights articles from the last `days` days, newest first (from sitemap).
+
+    Uses its own session: BMO sends a very large Content-Security-Policy header that
+    exceeds aiohttp's default 8190-byte header limit, so the shared app session 400s.
+    """
+    try:
+        async with aiohttp.ClientSession(max_line_size=65536, max_field_size=65536) as s:
+            async with s.get(BMO_SITEMAP, headers=td.UA,
+                             timeout=aiohttp.ClientTimeout(total=15)) as r:
+                raw = await r.text()
+    except Exception:
+        return None
+    raw = re.sub(r'\sxmlns="[^"]+"', "", raw, count=1)   # drop default ns for easy parsing
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+    now = datetime.now(timezone.utc)
+    rows = []
+    for u in root.iter("url"):
+        loc = (u.findtext("loc") or "").strip()
+        if not loc.startswith(BMO_INSIGHTS_PREFIX):
+            continue
+        try:
+            dt = datetime.fromisoformat((u.findtext("lastmod") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        age = (now - dt).days
+        if age < 0 or age > days:
+            continue
+        slug = loc[len(BMO_INSIGHTS_PREFIX):].strip("/")
+        meta = dt.strftime("%b %d") + (" · today" if age == 0
+                                       else " · 1d" if age == 1 else f" · {age}d")
+        rows.append((dt, {"kind": "web", "title": _slug_to_title(slug),
+                          "link": loc, "meta": meta}))
+    rows.sort(key=lambda x: x[0], reverse=True)
+    items = [it for _, it in rows[:limit]]
+    if not items:
+        return None
+    return {"name": f"BMO INSIGHTS · LAST {days} DAYS", "items": items}
 
 
 def _clean_html(s):
     return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", s or "")).split())
+
+
+def _slug(title):
+    return re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", title.lower()).strip())
 
 
 def _parse_research_feed(text, limit=12):
@@ -316,10 +387,14 @@ async def _research_feed(session, feed):
     items = []
     for it in _parse_research_feed(raw, 12):
         entry = {"title": it["title"], "meta": td._rss_age(it["pub"])}
+        if feed.get("author"):
+            entry["author"] = feed["author"]
         if feed["readable"]:
             entry["kind"], entry["link"] = "web", it["link"]
         else:
             entry["kind"], entry["body"] = "blurb", _clean_html(it["desc"])
+            if feed.get("link_base"):
+                entry["link"] = feed["link_base"] + _slug(it["title"]) + feed.get("link_suffix", "")
         items.append(entry)
     return {"name": feed["name"], "items": items}
 
@@ -339,9 +414,11 @@ async def api_research(request):
 
     sections = []
     if files:
-        sections.append({"name": "SAVED REPORTS", "items": files})
-    feeds = await asyncio.gather(*[_research_feed(request.app["session"], f)
-                                   for f in RESEARCH_FEEDS])
+        sections.append({"name": "Rosenberg Research", "items": files})
+    session = request.app["session"]
+    feeds = await asyncio.gather(
+        _bmo_insights_section(),
+        *[_research_feed(session, f) for f in RESEARCH_FEEDS])
     for fs in feeds:
         if fs and fs["items"]:
             sections.append(fs)
@@ -392,6 +469,55 @@ async def api_article(request):
         return web.json_response({"title": "", "paragraphs": [], "paywalled": True})
     art = await td.fetch_article(request.app["session"], url)
     return web.json_response(art)
+
+
+# Hosts we refuse to proxy — the embed endpoint fetches arbitrary URLs, so keep it from
+# being used to reach this machine / the LAN from a phone on the same Wi-Fi.
+_EMBED_BLOCK = re.compile(
+    r"^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|::1|"
+    r"172\.(1[6-9]|2\d|3[01])\.)")
+
+
+async def api_embed(request):
+    """Proxy a page so it renders INSIDE the reader's iframe instead of a new tab.
+
+    Sites that block framing do so with an X-Frame-Options / CSP `frame-ancestors`
+    response header; because we serve the fetched HTML from our own origin those
+    headers never reach the browser, so the iframe is allowed. A <base> tag is injected
+    so the page's relative CSS/images still resolve back to the original site.
+    """
+    url = request.query.get("url", "")
+    if not url.startswith(("http://", "https://")):
+        return web.Response(text="bad url", status=400)
+    host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0].lower()
+    if _EMBED_BLOCK.match(host):
+        return web.Response(text="blocked host", status=403)
+    try:
+        async with aiohttp.ClientSession(max_line_size=65536, max_field_size=65536) as s:
+            async with s.get(url, headers=td.UA,
+                             timeout=aiohttp.ClientTimeout(total=20)) as r:
+                ctype = r.headers.get("Content-Type", "text/html")
+                raw = await r.read()
+    except Exception as e:
+        return web.Response(text=f"Couldn't load the page ({e}).", status=502)
+
+    if "html" in ctype.lower():
+        doc = raw.decode("utf-8", "ignore")
+        # Render a STATIC snapshot: drop scripts so client-side apps (Next.js etc.) don't
+        # try to hydrate under our proxy origin and throw — the server-rendered article
+        # text stays. This also disarms most paywall/consent overlays that JS injects.
+        doc = re.sub(r"<script\b[^>]*>.*?</script>", "", doc, flags=re.I | re.S)
+        doc = re.sub(r"<script\b[^>]*/>", "", doc, flags=re.I)
+        # drop any in-document CSP meta that would re-impose frame-ancestors
+        doc = re.sub(r'<meta[^>]+http-equiv=["\']?content-security-policy["\'][^>]*>',
+                     "", doc, flags=re.I)
+        base = f'<base href="{html.escape(url, quote=True)}">'
+        if re.search(r"<head[^>]*>", doc, re.I):
+            doc = re.sub(r"(<head[^>]*>)", lambda m: m.group(1) + base, doc, count=1, flags=re.I)
+        else:
+            doc = base + doc
+        return web.Response(text=doc, content_type="text/html", charset="utf-8")
+    return web.Response(body=raw, content_type=ctype.split(";")[0].strip() or "application/octet-stream")
 
 
 def _fmt_money(v):
@@ -615,6 +741,7 @@ def make_app():
     app.router.add_get("/api/research", api_research)
     app.router.add_get("/api/research/read", api_research_read)
     app.router.add_get("/api/article", api_article)
+    app.router.add_get("/api/embed", api_embed)
     app.router.add_static("/static/", HERE / "static")
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_cleanup)
@@ -634,7 +761,7 @@ def _lan_ip():
 
 if __name__ == "__main__":
     host = os.environ.get("MKT_HOST", "127.0.0.1")   # 0.0.0.0 = LAN/phone access
-    port = int(os.environ.get("MKT_PORT", "8787"))
+    port = int(os.environ.get("MKT_PORT") or os.environ.get("PORT") or "8787")
     print(f"  Kessler-Katznelson web  ->  http://127.0.0.1:{port}", flush=True)
     if host == "0.0.0.0":
         ip = _lan_ip()
