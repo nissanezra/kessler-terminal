@@ -399,6 +399,207 @@ async def _research_feed(session, feed):
     return {"name": feed["name"], "items": items}
 
 
+# Official / academic economic feeds, grouped under one heading each. Items from every
+# feed in a group are merged and shown newest-first, tagged with their `src` label.
+ECON_GROUPS = [
+    {"heading": "FEDERAL RESERVE", "limit": 10, "feeds": [
+        {"src": "Fed · Press", "url": "https://www.federalreserve.gov/feeds/press_all.xml"},
+        {"src": "Fed · Speeches", "url": "https://www.federalreserve.gov/feeds/speeches.xml"},
+        {"src": "Fed · FEDS Notes", "url": "https://www.federalreserve.gov/feeds/feds_notes.xml"},
+        {"src": "NY Fed · Liberty St", "url": "https://libertystreeteconomics.newyorkfed.org/feed/"},
+        {"src": "Atlanta Fed · macroblog", "url": "https://www.atlantafed.org/rss/macroblog"},
+        {"src": "SF Fed", "url": "https://www.frbsf.org/feed/"},
+    ]},
+    {"heading": "U.S. DATA & BUDGET", "limit": 12, "feeds": [
+        {"src": "BEA", "url": "https://apps.bea.gov/rss/rss.xml"},
+        {"src": "CBO", "url": "https://www.cbo.gov/publications/all/rss.xml"},
+        {"src": "GAO · Fiscal", "url": "https://www.gao.gov/rss/topic/budget-and-spending"},
+    ]},
+    {"heading": "ACADEMIC RESEARCH", "limit": 8, "feeds": [
+        {"src": "NBER", "url": "https://back.nber.org/rss/new.xml"},
+    ]},
+    {"heading": "GLOBAL CENTRAL BANKS", "limit": 8, "feeds": [
+        {"src": "ECB", "url": "https://www.ecb.europa.eu/rss/press.xml"},
+    ]},
+]
+
+
+def _feed_ts(pub):
+    """Best-effort parse of an RSS/Atom date string to a sortable epoch (0.0 if unknown)."""
+    if not pub:
+        return 0.0
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(pub).timestamp()
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(pub.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+async def _fetch_feed_items(session, feed, per=6):
+    try:
+        async with session.get(feed["url"], headers=td.UA,
+                               timeout=aiohttp.ClientTimeout(total=12)) as r:
+            raw = await r.text()
+    except Exception:
+        return []
+    out = []
+    for it in _parse_research_feed(raw, per):
+        out.append({"title": it["title"], "meta": td._rss_age(it["pub"]),
+                    "author": feed["src"], "kind": "web", "link": it["link"],
+                    # feed summary — shown if the page itself can't be extracted
+                    # (many gov sites, e.g. CBO, bot-block their article pages).
+                    "body": _clean_html(it.get("desc", "")),
+                    "_ts": _feed_ts(it["pub"])})
+    return out
+
+
+async def _econ_group_section(session, group):
+    """One heading merging every feed in the group, newest-first."""
+    subs = await asyncio.gather(*[_fetch_feed_items(session, f) for f in group["feeds"]])
+    items = [it for sub in subs for it in sub]
+    items.sort(key=lambda x: x["_ts"], reverse=True)
+    items = items[:group.get("limit", 8)]
+    for it in items:
+        it.pop("_ts", None)
+    if not items:
+        return None
+    return {"name": group["heading"], "items": items}
+
+
+# US Treasury auctions — official TreasuryDirect JSON API (no key, no bot-wall).
+TD_UPCOMING = "https://www.treasurydirect.gov/TA_WS/securities/upcoming?format=json"
+TD_RESULTS = "https://www.treasurydirect.gov/TA_WS/securities/auctioned?format=json&days=7"
+
+
+def _td_amt(s):
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        return None
+    return f"${v/1e9:.0f}B" if v >= 1e9 else f"${v/1e6:.0f}M"
+
+
+def _td_bil(s):
+    """Money with one-decimal billions for the detail view (keeps e.g. $74.7B)."""
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        return None
+    if v >= 1e9:
+        return f"${v/1e9:.1f}B"
+    if v >= 1e6:
+        return f"${v/1e6:.0f}M"
+    return f"${v:,.0f}"
+
+
+def _td_kv(label, val, width=16):
+    return f"{label:<{width}}: {val}" if val not in (None, "") else None
+
+
+def _td_day(s):
+    try:
+        return datetime.fromisoformat((s or "").split("T")[0])
+    except ValueError:
+        return None
+
+
+def _td_num(s, suffix):
+    try:
+        return f"{float(s):.3f}{suffix}"
+    except (TypeError, ValueError):
+        return None
+
+
+async def _treasury_auctions_section(session):
+    """Upcoming Treasury auctions (schedule) + recent auction results, as data lines."""
+    async def get(url):
+        try:
+            # ssl=False: treasurydirect.gov serves a cert chain that certifi rejects
+            # (verifies fine in the macOS Keychain / curl). Safe here — public,
+            # read-only auction data, nothing sensitive is sent.
+            async with session.get(url, headers=td.UA, ssl=False,
+                                   timeout=aiohttp.ClientTimeout(total=12)) as r:
+                return await r.json(content_type=None)
+        except Exception:
+            return []
+    up, res = await asyncio.gather(get(TD_UPCOMING), get(TD_RESULTS))
+
+    def D(s):
+        return (s or "")[:10]
+
+    items = []
+    for x in sorted(up or [], key=lambda z: z.get("auctionDate", ""))[:7]:
+        term, typ = x.get("securityTerm", "").strip(), x.get("securityType", "").strip()
+        amt = _td_amt(x.get("offeringAmount"))
+        dt = _td_day(x.get("auctionDate"))
+        title = f"{term} {typ}" + (f" · {amt} offered" if amt else "")
+        body = "\n".join(filter(None, [
+            f"Upcoming auction — {term} {typ}",
+            _td_kv("CUSIP", x.get("cusip")),
+            _td_kv("Announced", D(x.get("announcementDate"))),
+            _td_kv("Auction date", D(x.get("auctionDate"))),
+            _td_kv("Issue date", D(x.get("issueDate"))),
+            _td_kv("Maturity", D(x.get("maturityDate"))),
+            _td_kv("Offering", _td_bil(x.get("offeringAmount"))),
+            _td_kv("Reopening", x.get("reopening")),
+            _td_kv("TIPS", x.get("tips") if x.get("tips") == "Yes" else None)]))
+        items.append({"title": title, "author": "Upcoming", "kind": "blurb", "body": body,
+                      "meta": dt.strftime("%b %d") if dt else "",
+                      "link": "https://www.treasurydirect.gov/auctions/upcoming/"})
+
+    for x in sorted(res or [], key=lambda z: z.get("auctionDate", ""), reverse=True)[:6]:
+        term, typ = x.get("securityTerm", "").strip(), x.get("securityType", "").strip()
+        yld = x.get("highYield")
+        # bills quote a discount rate; notes/bonds/TIPS quote a yield
+        hi = _td_num(yld, "%") or _td_num(x.get("highDiscountRate"), "%") or "n/a"
+        med = _td_num(x.get("averageMedianYield"), "%") or _td_num(x.get("averageMedianDiscountRate"), "%")
+        low = _td_num(x.get("lowYield"), "%") or _td_num(x.get("lowDiscountRate"), "%")
+        try:
+            btc = f"{float(x.get('bidToCoverRatio')):.2f}x"   # b/c convention: 2 decimals
+        except (TypeError, ValueError):
+            btc = "n/a"
+        dt = _td_day(x.get("auctionDate"))
+        rate_word = "High yield" if yld else "High rate"
+        title = f"{term} {typ} · {hi} · b/c {btc}"
+        body = "\n".join(ln for ln in [   # keep "" blank separators, drop missing (None) fields
+            f"Auction result — {term} {typ}",
+            _td_kv("CUSIP", x.get("cusip")),
+            _td_kv("Auction date", D(x.get("auctionDate"))),
+            _td_kv("Issue date", D(x.get("issueDate"))),
+            _td_kv("Maturity", D(x.get("maturityDate"))),
+            _td_kv("Format", x.get("auctionFormat")),
+            _td_kv("Reopening", x.get("reopening")),
+            "",
+            _td_kv("Offering", _td_bil(x.get("offeringAmount"))),
+            _td_kv("Total tendered", _td_bil(x.get("totalTendered"))),
+            _td_kv("Total accepted", _td_bil(x.get("totalAccepted"))),
+            _td_kv("Bid-to-cover", btc),
+            "",
+            _td_kv("Coupon", _td_num(x.get("interestRate"), "%")),
+            _td_kv(rate_word, hi + (f"  (inv. {_td_num(x.get('highInvestmentRate'), '%')})"
+                                    if x.get("highInvestmentRate") else "")),
+            _td_kv("Median", med),
+            _td_kv("Low", low),
+            _td_kv("Price /100", x.get("pricePer100")),
+            _td_kv("Allotted at high", _td_num(x.get("allocationPercentage"), "%")),
+            "",
+            _td_kv("Primary dealers", _td_bil(x.get("primaryDealerAccepted"))),
+            _td_kv("Direct bidders", _td_bil(x.get("directBidderAccepted"))),
+            _td_kv("Indirect bidders", _td_bil(x.get("indirectBidderAccepted"))),
+            _td_kv("Noncompetitive", _td_bil(x.get("noncompetitiveAccepted")))] if ln is not None)
+        items.append({"title": title, "author": "Result", "kind": "blurb", "body": body,
+                      "meta": dt.strftime("%b %d") if dt else "",
+                      "link": "https://www.treasurydirect.gov/auctions/auction-query/"})
+
+    if not items:
+        return None
+    return {"name": "US TREASURY AUCTIONS", "items": items}
+
+
 async def api_research(request):
     """Research view: saved files (drop into research/) + public feeds."""
     RESEARCH_DIR.mkdir(exist_ok=True)
@@ -416,9 +617,18 @@ async def api_research(request):
     if files:
         sections.append({"name": "Rosenberg Research", "items": files})
     session = request.app["session"]
-    feeds = await asyncio.gather(
-        _bmo_insights_section(),
-        *[_research_feed(session, f) for f in RESEARCH_FEEDS])
+    # Own session with raised header limits: some gov sites send oversized CSP headers
+    # that trip aiohttp's default 8190-byte cap (same issue BMO's sitemap has).
+    async with aiohttp.ClientSession(max_line_size=65536, max_field_size=65536) as econ:
+        # Order: Rosenberg (above) → BMO → Adam Taggart → Fed → Data&Budget →
+        # Treasury auctions → Academic → Global.
+        econ_tasks = [_econ_group_section(econ, g) for g in ECON_GROUPS]
+        tasks = [_bmo_insights_section()]
+        tasks += [_research_feed(session, f) for f in RESEARCH_FEEDS]
+        tasks += econ_tasks[:2]                      # FEDERAL RESERVE, U.S. DATA & BUDGET
+        tasks.append(_treasury_auctions_section(econ))
+        tasks += econ_tasks[2:]                      # ACADEMIC RESEARCH, GLOBAL
+        feeds = await asyncio.gather(*tasks)
     for fs in feeds:
         if fs and fs["items"]:
             sections.append(fs)
@@ -462,12 +672,43 @@ async def api_research_read(request):
     return web.json_response({"title": p.stem, "paragraphs": paras})
 
 
+# Phrases that mark a bot-wall / paywall / consent shell rather than real article text.
+# STRONG markers are unambiguous (a real article won't contain them); WEAK markers only
+# count when the page is short or errored (they can appear inside legitimate prose).
+_WALL_STRONG = (
+    "you're not a robot", "you are not a robot", "let us know you're not a robot",
+    "click the box below", "are you a robot", "verify you are a human",
+    "supports javascript and cookies", "enable javascript and cookies",
+    "checking your browser before", "attention required", "please enable js",
+    "access to this page has been denied",
+)
+_WALL_WEAK = (
+    "subscribe to continue", "subscriber-only", "subscribers only", "not a robot",
+    "enable javascript", "disable any ad blocker", "captcha", "access denied",
+    "reference id", "please enable cookies",
+)
+
+
+def _looks_walled(text, short_or_error=False):
+    t = (text or "").lower()
+    if any(m in t for m in _WALL_STRONG):
+        return True
+    return short_or_error and any(m in t for m in _WALL_WEAK)
+
+
 async def api_article(request):
     """Resolve + fetch an article so it can be read inside the app (no new tab)."""
     url = request.query.get("url", "")
     if not url:
         return web.json_response({"title": "", "paragraphs": [], "paywalled": True})
     art = await td.fetch_article(request.app["session"], url)
+    # The extractor sometimes returns a bot-wall / paywall shell (e.g. Bloomberg's
+    # "click the box … you're not a robot") as if it were the article. Reject it so the
+    # reader falls back to the embed (which shows a clean message) instead of the shell.
+    paras = art.get("paragraphs") or []
+    if paras and _looks_walled(" ".join(paras), short_or_error=len(" ".join(paras)) < 1500):
+        art["paragraphs"] = []
+        art["paywalled"] = True
     return web.json_response(art)
 
 
@@ -476,6 +717,16 @@ async def api_article(request):
 _EMBED_BLOCK = re.compile(
     r"^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|::1|"
     r"172\.(1[6-9]|2\d|3[01])\.)")
+
+# Shown inside the reader iframe when the target page is a bot-wall / JS challenge.
+_EMBED_BLOCKED_HTML = (
+    "<!doctype html><meta charset='utf-8'>"
+    "<div style=\"font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;"
+    "color:#bbb;background:#111;height:100%;margin:0;display:flex;align-items:center;"
+    "justify-content:center;text-align:center;padding:24px;box-sizing:border-box\">"
+    "<div>This page can't be shown here — the site requires a live browser "
+    "(bot protection).<br>Use <b style='color:#e0a63c'>“Open original ↗”</b> above "
+    "to read it.</div></div>")
 
 
 async def api_embed(request):
@@ -497,12 +748,22 @@ async def api_embed(request):
             async with s.get(url, headers=td.UA,
                              timeout=aiohttp.ClientTimeout(total=20)) as r:
                 ctype = r.headers.get("Content-Type", "text/html")
+                status = r.status
                 raw = await r.read()
     except Exception as e:
         return web.Response(text=f"Couldn't load the page ({e}).", status=502)
 
     if "html" in ctype.lower():
         doc = raw.decode("utf-8", "ignore")
+        # Bot-wall / JS-gate detection: some gov & news sites (e.g. CBO) return a tiny
+        # "please enable JS" challenge to non-browsers. Embedding that is useless, so
+        # show a clean message pointing at "Open original" instead of a blank white box.
+        _vis = " ".join(re.sub(r"<[^>]+>", " ",
+                        re.sub(r"<script.*?</script>|<style.*?</style>", "", doc,
+                               flags=re.S | re.I)).split())
+        if _looks_walled(_vis, short_or_error=(status >= 400 or len(_vis) < 240)):
+            return web.Response(text=_EMBED_BLOCKED_HTML, content_type="text/html",
+                                charset="utf-8")
         # Render a STATIC snapshot: drop scripts so client-side apps (Next.js etc.) don't
         # try to hydrate under our proxy origin and throw — the server-rendered article
         # text stays. This also disarms most paywall/consent overlays that JS injects.

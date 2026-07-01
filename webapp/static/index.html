@@ -169,6 +169,8 @@
   #rd-meta{color:var(--blue);font-size:12px;margin-bottom:12px;}
   #rd-body p{color:#e6e6e6;line-height:1.65;margin:0 0 12px;font-size:14px;}
   #rd-body .dim{color:var(--dim);}
+  #rd-body .rd-pre{font-family:var(--mono);color:#e6e6e6;font-size:13px;line-height:1.75;
+    white-space:pre-wrap;margin:0 0 10px;}
   /* embedded-page fallback: load the original inside the terminal, not a new tab */
   #rd-body .rd-embedwrap{margin-top:6px;}
   #rd-body .rd-embednote{color:var(--dim);font-size:11px;margin:0 0 6px;}
@@ -991,10 +993,30 @@ async function openArticle(elId,i){
   const _ext=document.getElementById("rd-ext"); _ext.href=it.link||"#"; _ext.style.display="";
   document.getElementById("rd-body").innerHTML="<p class='dim'>Loading…</p>";
   let a; try{a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json();}catch(e){a=null;}
-  if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
   const paras=(a&&a.paragraphs)||[];
-  if(paras.length) document.getElementById("rd-body").innerHTML=paras.map(p=>`<p>${esc(p)}</p>`).join("");
-  else embedInReader(it.link, a&&a.paywalled);
+  if(paras.length){
+    if(a.title)document.getElementById("rd-title").textContent=a.title;   // trust title only on success
+    document.getElementById("rd-body").innerHTML=paras.map(p=>`<p>${esc(p)}</p>`).join("");
+  } else readerFallback(it,a);
+}
+/* Extraction failed: show the feed summary if we have one, else load the original page
+   inside the reader (proxied). Keeps the reader off dead "enable JS" bot-walls. */
+function readerFallback(it,a){
+  const summary=(it.body||"").trim();
+  const ext=document.getElementById("rd-ext"); if(it.link){ext.href=it.link;ext.style.display="";}
+  if(summary.length>40){
+    document.getElementById("rd-body").innerHTML=
+      summary.split(/\n\n+/).map(p=>`<p>${esc(p)}</p>`).join("")
+      +`<p class="dim">Summary from the feed — tap “Open original ↗” above for the full report.</p>`;
+    return;
+  }
+  if(a&&a.paywalled){   // subscriber-only / bot-walled (e.g. Bloomberg) — embedding can't help
+    document.getElementById("rd-body").innerHTML=
+      `<p class="dim">This article is subscriber-only or bot-protected, so it can’t be shown here. `
+      +`Tap “Open original ↗” above to read it at the source.</p>`;
+    return;
+  }
+  embedInReader((a&&a.url)||it.link, a&&a.paywalled);   // embed the resolved publisher URL
 }
 /* When text can't be extracted, load the original page inside the reader (proxied so
    it isn't blocked from framing) instead of kicking out to a new tab. */
@@ -1047,18 +1069,17 @@ async function openResearch(i){
     ext.style.display="none";
     let a; try{ a=await(await fetch(`/api/research/read?file=${encodeURIComponent(it.file)}`)).json(); }catch(e){ a=null; }
     render((a&&a.paragraphs)||[], (a&&a.paragraphs&&a.paragraphs.length)?"":`<p class="dim">Couldn't read this file${a&&a.error?` (${esc(a.error)})`:""}.</p>`);
-  } else if(it.kind==="blurb"){
+  } else if(it.kind==="blurb"){   // structured detail (e.g. Treasury auctions) — show as-is
     if(it.link){ ext.href=it.link; ext.style.display=""; } else ext.style.display="none";
     if(it.author) document.getElementById("rd-meta").textContent=(it.meta||"")+(it.author?"  ·  "+it.author:"");
-    render((it.body||"").split(/\n\n+/).map(x=>x.trim()).filter(Boolean),
-      `<p class="dim">This is the episode summary — the full transcript renders only on BMO's site. Tap “Open original ↗” above to read it there.</p>`);
+    body.innerHTML=`<pre class="rd-pre">${esc((it.body||"").trim())}</pre>`
+      +(it.link?`<p class="dim">Source: TreasuryDirect — tap “Open original ↗” above.</p>`:"");
   } else {   // web article — fetch full text
     ext.href=it.link||"#"; ext.style.display="";
     let a; try{ a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json(); }catch(e){ a=null; }
-    if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
     const paras=(a&&a.paragraphs)||[];
-    if(paras.length) render(paras);
-    else embedInReader(it.link, a&&a.paywalled);
+    if(paras.length){ if(a.title)document.getElementById("rd-title").textContent=a.title; render(paras); }
+    else readerFallback(it,a);
   }
 }
 
