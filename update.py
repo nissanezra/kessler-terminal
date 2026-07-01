@@ -109,9 +109,26 @@ def _ensure_deps():
                 print(f"  update: pywebview install skipped — {e}")
 
 
+def _ensure_greeting():
+    """Set the splash greeting name once on Windows (Robert's machines). Never
+    overwrites a name already set locally (webapp/greeting.txt or MKT_USER)."""
+    if os.name != "nt":
+        return
+    path = os.path.join(HERE, "webapp", "greeting.txt")
+    if os.path.exists(path):
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("Robert")
+    except Exception:
+        pass
+
+
 def main():
     _ensure_wezterm_config()                 # every launch: keep the render config in place
     _ensure_deps()
+    _ensure_greeting()
     base = _resolve_base()                    # SHA-pinned when possible, never stale
     try:
         manifest = json.loads(_get(base + "version.json"))

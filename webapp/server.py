@@ -444,8 +444,23 @@ async def api_portfolio(request):
     })
 
 
+def _greeting_name():
+    """Whom to greet on the splash. Per-install (never shipped via the updater):
+    env MKT_USER, else a local webapp/greeting.txt, else no name."""
+    import os
+    name = os.environ.get("MKT_USER", "").strip()
+    if not name:
+        try:
+            name = (HERE / "greeting.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            name = ""
+    return name.split()[0] if name else ""
+
+
 async def index(request):
-    return web.FileResponse(HERE / "static" / "index.html")
+    html = (HERE / "static" / "index.html").read_text(encoding="utf-8")
+    return web.Response(text=html.replace("{{GREETING_NAME}}", _greeting_name()),
+                        content_type="text/html")
 
 
 async def on_start(app):
