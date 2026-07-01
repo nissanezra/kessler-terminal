@@ -10,8 +10,13 @@ then open http://127.0.0.1:8787
 """
 import asyncio
 import calendar
+import html
 import json
+import os
+import re
+import socket
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -266,6 +271,120 @@ async def api_news_board(request):
     } for s in secs]})
 
 
+RESEARCH_DIR = HERE.parent / "research"
+_RESEARCH_EXT = {".pdf", ".txt", ".md"}
+
+# Public research feeds shown alongside the folder. `readable`=True means the post's
+# full text is fetchable (opened via the article reader); False shows the feed blurb.
+RESEARCH_FEEDS = [
+    {"name": "Adam Taggart · Thoughtful Money",
+     "url": "https://adamtaggart.substack.com/feed", "readable": True},
+    {"name": "BMO Macro Horizons · Ian Lyngen",
+     "url": "https://feeds.megaphone.fm/macrohorizons", "readable": False},
+]
+
+
+def _clean_html(s):
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", s or "")).split())
+
+
+def _parse_research_feed(text, limit=12):
+    out = []
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return out
+    for it in root.iter("item"):
+        title = (it.findtext("title") or "").strip()
+        if not title:
+            continue
+        out.append({"title": title, "link": (it.findtext("link") or "").strip(),
+                    "pub": (it.findtext("pubDate") or "").strip(),
+                    "desc": it.findtext("description") or ""})
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _research_feed(session, feed):
+    try:
+        async with session.get(feed["url"], headers=td.UA,
+                               timeout=aiohttp.ClientTimeout(total=12)) as r:
+            raw = await r.text()
+    except Exception:
+        return None
+    items = []
+    for it in _parse_research_feed(raw, 12):
+        entry = {"title": it["title"], "meta": td._rss_age(it["pub"])}
+        if feed["readable"]:
+            entry["kind"], entry["link"] = "web", it["link"]
+        else:
+            entry["kind"], entry["body"] = "blurb", _clean_html(it["desc"])
+        items.append(entry)
+    return {"name": feed["name"], "items": items}
+
+
+async def api_research(request):
+    """Research view: saved files (drop into research/) + public feeds."""
+    RESEARCH_DIR.mkdir(exist_ok=True)
+    files = []
+    for p in RESEARCH_DIR.iterdir():
+        if p.is_file() and p.suffix.lower() in _RESEARCH_EXT and not p.name.startswith("."):
+            st = p.stat()
+            files.append({"kind": "file", "file": p.name, "title": p.stem,
+                          "ext": p.suffix.lower().lstrip("."), "_m": st.st_mtime})
+    files.sort(key=lambda x: x["_m"], reverse=True)
+    for it in files:
+        it["meta"] = datetime.fromtimestamp(it.pop("_m")).strftime("%b %d, %Y")
+
+    sections = []
+    if files:
+        sections.append({"name": "SAVED REPORTS", "items": files})
+    feeds = await asyncio.gather(*[_research_feed(request.app["session"], f)
+                                   for f in RESEARCH_FEEDS])
+    for fs in feeds:
+        if fs and fs["items"]:
+            sections.append(fs)
+    return web.json_response({"sections": sections})
+
+
+def _pdf_paragraphs(path):
+    import pypdf
+    reader = pypdf.PdfReader(str(path))
+    paras, buf = [], ""
+    for page in reader.pages:
+        for line in (page.extract_text() or "").split("\n"):
+            line = line.rstrip()
+            if not line:
+                if buf:
+                    paras.append(buf.strip()); buf = ""
+                continue
+            buf = (buf + " " + line).strip() if buf else line
+            if line.endswith((".", "!", "?", ":", ";", "”", '"')) or len(line) < 42:
+                paras.append(buf.strip()); buf = ""
+    if buf:
+        paras.append(buf.strip())
+    return [x for x in paras if len(x.strip(".•·–—- ")) > 1]
+
+
+async def api_research_read(request):
+    """Extract one report's text for the in-app reader."""
+    name = request.query.get("file", "")
+    p = RESEARCH_DIR / name
+    if (not name or "/" in name or "\\" in name or ".." in name
+            or not p.is_file() or p.suffix.lower() not in _RESEARCH_EXT):
+        return web.json_response({"title": name, "paragraphs": [], "error": "not found"}, status=404)
+    try:
+        if p.suffix.lower() == ".pdf":
+            paras = _pdf_paragraphs(p)
+        else:
+            paras = [b.strip() for b in p.read_text(encoding="utf-8", errors="replace").split("\n\n")
+                     if b.strip()]
+    except Exception as e:
+        return web.json_response({"title": p.stem, "paragraphs": [], "error": str(e)})
+    return web.json_response({"title": p.stem, "paragraphs": paras})
+
+
 async def api_article(request):
     """Resolve + fetch an article so it can be read inside the app (no new tab)."""
     url = request.query.get("url", "")
@@ -493,6 +612,8 @@ def make_app():
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)
     app.router.add_get("/api/news_board", api_news_board)
+    app.router.add_get("/api/research", api_research)
+    app.router.add_get("/api/research/read", api_research_read)
     app.router.add_get("/api/article", api_article)
     app.router.add_static("/static/", HERE / "static")
     app.on_startup.append(on_start)
@@ -500,6 +621,25 @@ def make_app():
     return app
 
 
+def _lan_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
+
+
 if __name__ == "__main__":
-    print("Markets web prototype → http://127.0.0.1:8787")
-    web.run_app(make_app(), host="127.0.0.1", port=8787, print=None)
+    host = os.environ.get("MKT_HOST", "127.0.0.1")   # 0.0.0.0 = LAN/phone access
+    port = int(os.environ.get("MKT_PORT", "8787"))
+    print(f"  Kessler-Katznelson web  ->  http://127.0.0.1:{port}", flush=True)
+    if host == "0.0.0.0":
+        ip = _lan_ip()
+        if ip:
+            print(f"  iPhone (same Wi-Fi)     ->  http://{ip}:{port}"
+                  f"   (Safari > Share > Add to Home Screen)", flush=True)
+    print("  Keep this window open while using the phone. Ctrl-C to stop.", flush=True)
+    web.run_app(make_app(), host=host, port=port, print=None)

@@ -94,6 +94,17 @@ def _ensure_deps():
                            timeout=120)
         except Exception as e:
             print(f"  update: plotext install skipped — {e}")
+    # Research view: read saved PDF reports (Rosenberg etc.) in the terminal.
+    try:
+        import pypdf  # noqa: F401
+    except Exception:
+        print("  update: installing PDF reader (pypdf)…")
+        try:
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pypdf"],
+                           timeout=120)
+        except Exception as e:
+            print(f"  update: pypdf install skipped — {e}")
     # Web terminal: a native window on Windows needs pywebview (Edge WebView2).
     # Best-effort — if it won't install, the web app just opens in the browser.
     if os.name == "nt":

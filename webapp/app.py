@@ -8,6 +8,7 @@ launcher works everywhere.
     ./.venv/bin/python webapp/app.py
 """
 import asyncio
+import os
 import socket
 import sys
 import threading
@@ -20,7 +21,8 @@ sys.path.insert(0, str(HERE))            # so `import server` works
 import server                            # noqa: E402
 from aiohttp import web                  # noqa: E402
 
-HOST, PREFERRED_PORT = "127.0.0.1", 8787
+HOST = os.environ.get("MKT_HOST", "127.0.0.1")   # bind iface; 0.0.0.0 = LAN/phone access
+PREFERRED_PORT = 8787
 _ready = threading.Event()
 _port = {"value": PREFERRED_PORT}
 
@@ -52,10 +54,28 @@ def _serve():
     loop.run_forever()
 
 
+def _lan_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
+
+
 def main():
     threading.Thread(target=_serve, daemon=True).start()
     _ready.wait(timeout=15)
-    url = f"http://{HOST}:{_port['value']}"
+    port = _port["value"]
+    url = f"http://127.0.0.1:{port}"                  # native window always uses loopback
+    print(f"  serving on {url}", flush=True)
+    if HOST == "0.0.0.0":
+        ip = _lan_ip()
+        if ip:
+            print(f"  iPhone (same Wi-Fi): http://{ip}:{port}"
+                  f"   —  open in Safari, then Share › Add to Home Screen", flush=True)
     try:
         import webview
         webview.create_window("Kessler-Katznelson Terminal", url,

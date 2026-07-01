@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Kessler-Katznelson Terminal</title>
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="Kessler-Katznelson" />
+<meta name="theme-color" content="#000000" />
+<link rel="apple-touch-icon" href="/static/icon-180.png" />
+<link rel="manifest" href="/static/manifest.json" />
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root{
@@ -203,6 +210,31 @@
     .ctitle,.crange{color:#111!important;}
     .legend{color:#555!important;--price:#111;}
   }
+  /* ---- mobile / iPhone home-screen web app ---- */
+  @media(max-width:820px){
+    html,body{font-size:12px;}
+    body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
+    #titlebar{flex-wrap:wrap;gap:6px 10px;}
+    #titlebar .name{font-size:12px;}
+    #titlebar .clock{font-size:11px;margin-left:auto;}
+    #cmd{order:5;flex:1 1 100%;padding:8px;font-size:14px;}
+    #monitor{grid-template-columns:1fr!important;gap:0;padding:6px 8px;}
+    .row{grid-template-columns:1fr auto auto auto;gap:10px;line-height:1.7;}
+    .row .time{display:none;}
+    .sec-hdr{padding:3px 6px;}
+    .btn,.tf{padding:8px 12px;}
+    .tfbar{gap:6px;}
+    .nb-cols{grid-template-columns:1fr;}
+    .chart-top{gap:8px 10px;}
+    #chartview,#compareview{height:auto;min-height:calc(100vh - 96px);}
+    #chart-full,#cmp-chart{height:60vh;}
+    #sec-chart{height:44vh;}
+    .fundgrid{grid-template-columns:1fr 1fr;}
+    #faview,#portview{height:auto;}
+    .splash-lockup{flex-direction:column;gap:14px;text-align:center;}
+    .splash-name{font-size:30px;white-space:normal;} .splash-tag{font-size:18px;}
+    .splash-greeting{font-size:19px;}
+  }
 </style>
 </head>
 <body>
@@ -299,6 +331,13 @@
       <span class="ctitle" id="nv-title">MARKET NEWS</span></div>
     <div class="nb-sub" id="nv-sub"></div>
     <div class="news" id="nv-news"></div>
+  </div>
+
+  <div id="researchview" class="view" style="padding:6px 12px;">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <span class="ctitle">RESEARCH</span>
+      <span class="dim" style="font-size:12px;">drop reports into the research/ folder</span></div>
+    <div class="news" id="rs-list"></div>
   </div>
 
   <div id="readerview" class="view">
@@ -929,7 +968,7 @@ async function openArticle(elId,i){
   show("readerview");
   document.getElementById("rd-title").textContent=it.title;
   document.getElementById("rd-meta").textContent=(it.source||"")+(it.age?"  ·  "+it.age:"");
-  document.getElementById("rd-ext").href=it.link||"#";
+  const _ext=document.getElementById("rd-ext"); _ext.href=it.link||"#"; _ext.style.display="";
   document.getElementById("rd-body").innerHTML="<p class='dim'>Loading…</p>";
   let a; try{a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json();}catch(e){a=null;}
   if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
@@ -938,7 +977,57 @@ async function openArticle(elId,i){
     ? paras.map(p=>`<p>${esc(p)}</p>`).join("")
     : `<p class="dim">Couldn't extract the full text here${a&&a.paywalled?" (the source may be paywalled)":""}. Use “Open original ↗”.</p>`;
 }
-function readerBack(){ show(readerFrom==="security"?"security":"newsview"); }
+function readerBack(){
+  show(readerFrom==="security"?"security":readerFrom==="research"?"researchview":"newsview"); }
+
+/* ---------------- research (saved reports + public feeds, read like the news) ---------------- */
+let researchItems=[];
+async function showResearch(){
+  show("researchview");
+  const el=document.getElementById("rs-list"); el.innerHTML="<p class='dim'>Loading…</p>";
+  let d; try{ d=await(await fetch("/api/research")).json(); }
+  catch(e){ el.innerHTML="<p class='dim'>Couldn't load research.</p>"; return; }
+  const sections=d.sections||[]; researchItems=[];
+  if(!sections.length){
+    el.innerHTML="<p class='dim'>Nothing yet. Drop PDFs (or .txt) into "
+      +"<code>~/markets-dashboard/research/</code>, or check your connection for the feeds.</p>"; return; }
+  let html="", gi=0;
+  for(const sec of sections){
+    html+=`<div class="nb-head" style="margin-top:14px">▌ ${esc(sec.name)}</div>`;
+    for(const it of sec.items){
+      const idx=gi++; researchItems.push(it);
+      html+=`<div class="it"><span class="bull">• </span>`
+        +`<span class="hl" onclick="openResearch(${idx})">${esc(it.title)}</span>`
+        +(it.ext?` <span class="src">${esc(it.ext.toUpperCase())}</span>`:"")
+        +(it.meta?` <span class="age">${esc(it.meta)}</span>`:"")+`</div>`;
+    }
+  }
+  el.innerHTML=html;
+}
+async function openResearch(i){
+  const it=researchItems[i]; if(!it)return;
+  readerFrom="research"; show("readerview");
+  const ext=document.getElementById("rd-ext"), body=document.getElementById("rd-body");
+  document.getElementById("rd-title").textContent=it.title;
+  document.getElementById("rd-meta").textContent=it.meta||"";
+  body.innerHTML="<p class='dim'>Loading…</p>";
+  const render=(paras,tail)=>{ body.innerHTML=(paras&&paras.length)
+    ? paras.map(p=>`<p>${esc(p)}</p>`).join("")+(tail||"") : (tail||`<p class="dim">Nothing to show.</p>`); };
+  if(it.kind==="file"){
+    ext.style.display="none";
+    let a; try{ a=await(await fetch(`/api/research/read?file=${encodeURIComponent(it.file)}`)).json(); }catch(e){ a=null; }
+    render((a&&a.paragraphs)||[], (a&&a.paragraphs&&a.paragraphs.length)?"":`<p class="dim">Couldn't read this file${a&&a.error?` (${esc(a.error)})`:""}.</p>`);
+  } else if(it.kind==="blurb"){
+    ext.style.display="none";
+    render((it.body||"").split(/\n\n+/).map(x=>x.trim()).filter(Boolean),
+      `<p class="dim">Full transcript isn't available in the terminal — this is the episode summary. Save the transcript into the research/ folder to read it all here.</p>`);
+  } else {   // web article — fetch full text
+    ext.href=it.link||"#"; ext.style.display="";
+    let a; try{ a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json(); }catch(e){ a=null; }
+    if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
+    render((a&&a.paragraphs)||[], (a&&a.paragraphs&&a.paragraphs.length)?"":`<p class="dim">Couldn't extract the text${a&&a.paywalled?" (may be subscriber-only)":""}. Use “Open original ↗”.</p>`);
+  }
+}
 
 /* ---------------- add to dashboard ---------------- */
 let addTicker=null, toastT=null;
@@ -985,6 +1074,7 @@ function run(raw){
   const cmd=t[0];
   if(["MON","HOME"].includes(cmd))return showMonitor();
   if(["NEWS","WIRE"].includes(cmd))return showNews(null);
+  if(["RESEARCH","RSRCH","RSCH","ROSENBERG","ROSIE"].includes(cmd))return showResearch();
   if(["PORT","PORTFOLIO","HOLDINGS","PNL"].includes(cmd))return showPortfolio();
   const ticker=cmd, rest=t.slice(1), fn=rest[0];
   if(["GP","CHART","G"].includes(fn)){const tf=rest.find(x=>TFS.includes(x))||"1Y";return showChart(ticker,tf);}
