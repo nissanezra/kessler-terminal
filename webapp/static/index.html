@@ -59,6 +59,16 @@
     letter-spacing:.06em;white-space:nowrap;transition:background .12s,color .12s;}
   .navbtn:hover{background:var(--amber);color:#000;border-color:var(--amber);}
   .navbtn:active{transform:translateY(1px);}
+  /* loading badge shown while a ticker's data is being fetched */
+  .loadbadge{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:60;
+    background:#191308;border:1px solid #4a3a15;color:var(--amber);
+    font:13px/1 var(--mono);font-weight:700;letter-spacing:.06em;
+    padding:11px 20px;border-radius:6px;display:none;align-items:center;gap:10px;
+    box-shadow:0 8px 28px rgba(0,0,0,.6);}
+  .loadbadge.show{display:inline-flex;}
+  .loadbadge .spin{width:12px;height:12px;border:2px solid #4a3a15;border-top-color:var(--amber);
+    border-radius:50%;animation:ldspin .7s linear infinite;}
+  @keyframes ldspin{to{transform:rotate(360deg);}}
   .view{display:none!important;}
   .view.active{display:block!important;}
   #monitor.active{display:grid!important;}
@@ -277,12 +287,15 @@
     <span class="clock" id="clock"></span>
   </div>
 
+  <div id="loadbadge" class="loadbadge"><span class="spin"></span><span id="loadbadge-txt"></span></div>
+
   <div id="monitor" class="view active"></div>
 
   <div id="security" class="view">
     <div class="sec-tophd">
       <div class="sec-head" id="sec-head"></div>
       <button class="btn add-btn" onclick="openAddModal(state.security.ticker)">Add to Dashboard</button>
+      <button class="btn" onclick="showChart(state.security.ticker,state.security.tf)">GP</button>
       <button class="btn" data-mbtn="sec-chart" onclick="toggleMeasure('sec-chart')">Measure</button>
       <button class="btn" onclick="openCompareTickers(state.security.ticker,state.security.tf)">Compare</button>
       <button class="btn" onclick="openCompareTf(state.security.ticker,state.security.tf)">Compare TF</button>
@@ -302,11 +315,11 @@
   <div id="chartview" class="view">
     <div class="chart-top">
       <button class="btn" onclick="showMonitor()">← Monitor</button>
-      <button class="btn" data-mbtn="chart-full" onclick="toggleMeasure('chart-full')">Measure</button>
       <span class="cinfo"><span class="ctitle" id="cf-title"></span><span id="cf-last"></span></span>
       <div class="tfbar" id="cf-tfbar"></div>
       <span class="crange" id="cf-range"></span>
       <button class="btn add-btn" onclick="openAddModal(state.full.ticker)">Add to Dashboard</button>
+      <button class="btn" data-mbtn="chart-full" onclick="toggleMeasure('chart-full')">Measure</button>
       <button class="btn" onclick="openCompareTickers(state.full.ticker,state.full.tf)">Compare</button>
       <button class="btn" onclick="openCompareTf(state.full.ticker,state.full.tf)">Compare TF</button>
       <button class="btn print-btn" onclick="doPrint()">Print</button>
@@ -879,6 +892,12 @@ function applyCustom(which){
        loadChartInto("sec-chart",state.security.ticker,null,state.security.custom);}
 }
 /* full chart view */
+/* small animated badge so a slow ticker load doesn't look stuck */
+function setLoading(on,label){
+  const b=document.getElementById("loadbadge");
+  if(on){document.getElementById("loadbadge-txt").textContent="Loading "+(label||"")+"…";b.classList.add("show");}
+  else b.classList.remove("show");
+}
 async function showChart(ticker,tf){
   state.full.ticker=ticker; if(tf){state.full.tf=tf;state.full.custom=null;}
   show("chartview");
@@ -886,7 +905,10 @@ async function showChart(ticker,tf){
   tfButtons("cf-tfbar",state.full.custom?"CUSTOM":state.full.tf,"setFullTf","full");
   updateRange("full");
   renderLegend("cf-legend");
+  setLoading(true,ticker);
   const d=await loadChartInto("chart-full",ticker,state.full.tf,state.full.custom);
+  if(state.full.ticker!==ticker)return;           // superseded by a newer pick
+  setLoading(false);
   if(d){document.getElementById("cf-title").textContent=d.display||ticker;
     const p=d.price||[];if(p.length>1){const last=p[p.length-1].value,chg=(last/p[0].value-1)*100;
       const lbl=state.full.custom?"CUSTOM":state.full.tf;
@@ -900,7 +922,16 @@ async function showSecurity(ticker){
   state.security.ticker=ticker; state.security.custom=null;
   document.getElementById("sec-daterow").classList.remove("show");
   show("security");
-  let d; try{d=await(await fetch(`/api/security?ticker=${encodeURIComponent(ticker)}`)).json();}catch(e){return;}
+  // immediate feedback: /api/security can take a couple seconds
+  setLoading(true,ticker);
+  document.getElementById("sec-head").innerHTML=`<span class="sym">${esc(ticker)}</span><span class="nm dim">loading…</span>`;
+  document.getElementById("sec-fund").innerHTML="<p class='dim'>Loading data…</p>";
+  document.getElementById("sec-pe").innerHTML="";
+  let d; try{d=await(await fetch(`/api/security?ticker=${encodeURIComponent(ticker)}`)).json();}
+  catch(e){ if(state.security.ticker===ticker){setLoading(false);
+    document.getElementById("sec-fund").innerHTML=`<p class='dim'>Couldn't load ${esc(ticker)}. Check the symbol or your connection.</p>`;} return; }
+  if(state.security.ticker!==ticker)return;        // superseded by a newer pick
+  setLoading(false);
   const cls=d.up?"up":"down";
   document.getElementById("sec-head").innerHTML=
     `<span class="sym">${d.ticker}</span><span class="nm">${d.name||d.display||""}</span>`+
