@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kessler-Katznelson Terminal</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{
+    --bg:#0a0a0a; --amber:#ffaf00; --yellow:#ffd400; --green:#00af00; --red:#d70000;
+    --dim:#808080; --white:#ffffff; --hdr:#262626; --price:#dadada; --magenta:#ff3b9a;
+    --blue:#5fafd7; --mono:"SF Mono",Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--white);
+    font-family:var(--mono);font-size:13px;}
+  /* ---- launch splash ---- */
+  #splash{position:fixed;inset:0;z-index:1000;background:#000;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px;
+    transition:opacity .6s ease;}
+  #splash.hide{opacity:0;pointer-events:none;}
+  .splash-lockup{display:flex;align-items:center;gap:30px;padding:0 20px;}
+  .splash-k{font-family:Georgia,"Times New Roman",serif;font-weight:700;font-size:150px;
+    line-height:.9;background:linear-gradient(158deg,#fff7d6 0%,#eec766 26%,#c9992a 52%,
+      #f6dd87 74%,#9a7a24 100%);-webkit-background-clip:text;background-clip:text;
+    color:transparent;filter:drop-shadow(0 3px 10px rgba(212,175,55,.28));
+    animation:splashglow 2.4s ease-in-out infinite;}
+  .splash-name{font-family:Georgia,"Times New Roman",serif;color:#fff;font-weight:600;
+    font-size:46px;line-height:1.05;white-space:nowrap;}
+  .splash-tag{font-family:Georgia,"Times New Roman",serif;font-style:italic;
+    color:#e6c15c;font-size:26px;margin-top:10px;}
+  .splash-load{width:190px;height:2px;background:#241f10;overflow:hidden;}
+  .splash-load span{display:block;height:100%;width:38%;
+    background:linear-gradient(90deg,transparent,#eec766,transparent);
+    animation:splashslide 1.15s ease-in-out infinite;}
+  @keyframes splashslide{0%{transform:translateX(-140%);}100%{transform:translateX(400%);}}
+  @keyframes splashglow{0%,100%{filter:drop-shadow(0 3px 10px rgba(212,175,55,.22));}
+    50%{filter:drop-shadow(0 3px 16px rgba(238,199,102,.5));}}
+  @media(max-width:640px){.splash-lockup{flex-direction:column;gap:14px;text-align:center;}
+    .splash-k{font-size:110px;} .splash-name{font-size:34px;white-space:normal;} .splash-tag{font-size:20px;}}
+  #titlebar{display:flex;align-items:center;gap:12px;padding:4px 10px;background:#000;
+    border-bottom:1px solid #1a1a1a;}
+  #titlebar .name{color:var(--amber);font-weight:700;letter-spacing:.06em;white-space:nowrap;}
+  #cmd{flex:1;background:#141414;border:1px solid #2a2a2a;color:var(--white);
+    font-family:var(--mono);font-size:13px;padding:3px 8px;outline:none;}
+  #cmd::placeholder{color:#555;}
+  #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;}
+  .view{display:none!important;}
+  .view.active{display:block!important;}
+  #monitor.active{display:grid!important;}
+  #chartview.active{display:flex!important;}
+  /* ---- monitor grid ---- */
+  #monitor{gap:0 18px;padding:6px 10px;align-items:start;}
+  .section{margin-bottom:10px;}
+  .sec-hdr{color:var(--amber);font-weight:700;background:var(--hdr);padding:1px 6px;letter-spacing:.04em;}
+  .row{display:grid;grid-template-columns:1fr auto auto auto auto;gap:8px;padding:0 6px;white-space:nowrap;line-height:1.45;}
+  .lbl{color:var(--yellow);overflow:hidden;text-overflow:ellipsis;}
+  .lbl.clk{cursor:pointer;} .lbl.clk:hover{color:#fff;}
+  .price{color:var(--white);text-align:right;font-weight:700;transition:background .05s;}
+  .chg,.pct{text-align:right;} .up{color:var(--green);} .down{color:var(--red);}
+  .time{color:var(--dim);text-align:right;}
+  .flash-up{background:var(--green);color:#000!important;}
+  .flash-down{background:var(--red);color:#fff!important;}
+  /* ---- shared chart ---- */
+  .chart-top{display:flex;align-items:center;gap:14px;margin-bottom:4px;flex-wrap:wrap;}
+  .btn{color:var(--amber);background:#1a1a1a;border:none;padding:3px 9px;cursor:pointer;font-family:var(--mono);font-size:13px;}
+  .btn:hover{background:#2a2a2a;}
+  .ctitle{color:var(--amber);font-weight:700;font-size:15px;}
+  .tfbar{display:flex;gap:4px;flex-wrap:wrap;}
+  .tf{color:var(--price);background:#1a1a1a;border:none;padding:2px 8px;cursor:pointer;font-family:var(--mono);font-size:12px;}
+  .tf.active{background:var(--amber);color:#000;font-weight:700;}
+  .crange{color:var(--amber);font-size:12px;font-weight:700;white-space:nowrap;}
+  .cinfo{display:flex;align-items:center;gap:8px;white-space:nowrap;}
+  .legend{display:flex;gap:16px;margin:2px 0 4px;font-size:12px;color:var(--dim);}
+  .legend .legtog{cursor:pointer;user-select:none;}
+  .daterow{display:none;gap:6px;align-items:center;margin:4px 0;}
+  .daterow.show{display:flex;}
+  .daterow input[type=date]{background:#141414;border:1px solid #2a2a2a;color:var(--white);
+    font-family:var(--mono);font-size:12px;padding:2px 6px;color-scheme:dark;}
+  .daterow .dsep{color:var(--dim);}
+  /* ---- chart view (full) ---- */
+  #chartview{padding:6px 10px;height:calc(100vh - 30px);display:flex;flex-direction:column;}
+  #chartview.active{display:flex;}
+  #chart-full{flex:1;min-height:0;}
+  /* ---- compare view ---- */
+  #compareview{padding:6px 10px;height:calc(100vh - 30px);}
+  #compareview.active{display:flex!important;flex-direction:column;}
+  #cmp-chart{flex:1;min-height:0;}
+  .cmp-input{background:#141414;border:1px solid #2a2a2a;color:var(--white);
+    font-family:var(--mono);font-size:12px;padding:2px 6px;color-scheme:dark;}
+  #cmp-add-ticker{width:96px;text-transform:uppercase;}
+  .cmp-leg{margin-right:16px;white-space:nowrap;}
+  .cmp-val{color:#cfcfcf;}
+  .cmp-x{color:var(--dim);cursor:pointer;margin-left:5px;}
+  .cmp-x:hover{color:var(--red);}
+  /* ---- financials (FA) view ---- */
+  #faview{padding:6px 12px;overflow:auto;height:calc(100vh - 30px);}
+  .fa-stmt{margin:0 0 18px;}
+  .fa-stname{color:var(--amber);font-weight:700;margin:10px 0 4px;letter-spacing:.03em;}
+  .fa-tab{border-collapse:collapse;}
+  .fa-tab td{padding:1px 14px;text-align:right;white-space:nowrap;}
+  .fa-tab .fa-lab,.fa-tab .fa-rowlab{text-align:left;color:var(--amber);position:sticky;left:0;background:var(--bg);}
+  .fa-tab .fa-lab2,.fa-tab .fa-rowlab2{text-align:left;color:var(--white);}
+  .fa-yr{color:var(--amber);font-weight:700;} .fa-yr.partial{color:var(--blue);}
+  .fa-val{color:var(--white);} .fa-val.amber{color:var(--amber);} .fa-val.dim{color:var(--dim);}
+  .fa-tab .fa-rowlab.fcf,.fa-tab .fa-val.fcf{color:#34c3d6;font-weight:700;}
+  .fa-src{color:var(--dim);font-size:11px;margin:10px 0 20px;max-width:900px;line-height:1.5;}
+  /* ---- portfolio (PORT) view ---- */
+  #portview{padding:8px 14px;overflow:auto;height:calc(100vh - 30px);}
+  .pf-net{font-size:14px;margin:4px 0 14px;}
+  .pf-net .pf-big{color:var(--white);font-weight:700;font-size:18px;margin-left:6px;}
+  .pf-sec{color:var(--amber);font-weight:700;margin:14px 0 4px;letter-spacing:.03em;}
+  .pf-tab{border-collapse:collapse;margin-bottom:4px;}
+  .pf-tab td{padding:1px 16px;text-align:right;white-space:nowrap;}
+  .pf-tab td:first-child{text-align:left;}
+  .pf-tab tr:first-child td{color:var(--amber);font-weight:700;}
+  .pf-name{color:var(--amber);}
+  .pf-val{color:var(--white);font-weight:700;}
+  .pf-tab tr.pf-tot td{color:var(--white);font-weight:700;border-top:1px solid #222;padding-top:2px;}
+  .pf-since{margin:14px 0 4px;font-size:14px;}
+  /* ---- security page ---- */
+  #security{padding:6px 12px;}
+  .sec-head{font-size:15px;margin-bottom:8px;}
+  .sec-head .sym{background:var(--amber);color:#000;font-weight:700;padding:1px 7px;}
+  .sec-head .nm{color:var(--white);font-weight:700;margin-left:8px;}
+  .fundgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1px 18px;margin:8px 0;}
+  .fundgrid .f{display:flex;justify-content:space-between;}
+  .fundgrid .fk{color:var(--amber);} .fundgrid .fv{color:var(--white);font-weight:700;}
+  .pe-wrap{overflow-x:auto;margin:8px 0;border-top:1px solid #1a1a1a;border-bottom:1px solid #1a1a1a;padding:5px 0;}
+  .pe-tab{border-collapse:collapse;}
+  .pe-tab td{padding:0 8px;text-align:right;white-space:nowrap;}
+  .pe-tab .lab{color:var(--amber);font-weight:700;text-align:left;}
+  .pe-tab .yr{color:var(--dim);} .pe-tab .val{color:var(--white);font-weight:700;}
+  .pe-note{color:var(--dim);font-size:11px;}
+  #sec-chart{height:340px;margin:6px 0;}
+  .news-hd{color:var(--amber);font-weight:700;margin:10px 0 4px;}
+  .news .it{padding:1px 0;line-height:1.5;}
+  .news .it a{color:var(--white);text-decoration:none;}
+  .news .it a:hover{color:var(--yellow);}
+  .news .src{color:var(--blue);} .news .age{color:var(--dim);}
+  .news .hl{color:var(--white);cursor:pointer;}
+  .news .hl:hover{color:var(--yellow);}
+  .bull{color:var(--amber);}
+  /* ---- multi-section news board (2-col, terminal style) ---- */
+  .nb-sub{color:var(--dim);font-size:12px;margin:0 0 8px;}
+  .nb-cols{display:grid;grid-template-columns:1fr 1fr;gap:0 30px;align-items:start;}
+  .nb-sec{margin-bottom:12px;}
+  .nb-head{color:var(--amber);font-weight:700;margin:2px 0 3px;letter-spacing:.03em;}
+  .nb-item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0 10px;line-height:1.55;}
+  .nb-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .nb-title .hl{cursor:pointer;color:var(--white);} .nb-title .hl:hover{color:var(--yellow);}
+  /* ---- in-app article reader ---- */
+  #readerview{padding:8px 12px;max-width:880px;}
+  #rd-title{color:var(--amber);font-weight:700;font-size:20px;line-height:1.3;margin:6px 0;}
+  #rd-meta{color:var(--blue);font-size:12px;margin-bottom:12px;}
+  #rd-body p{color:#e6e6e6;line-height:1.65;margin:0 0 12px;font-size:14px;}
+  #rd-body .dim{color:var(--dim);}
+  #rd-ext{margin-left:auto;text-decoration:none;}
+  .add-btn{margin-left:auto;}
+  .print-btn{margin-left:8px;}
+  .sec-tophd{display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap;}
+  .sec-tophd .sec-head{margin-bottom:0;}
+  /* add-to-dashboard sector picker */
+  .addmodal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;
+    display:none;align-items:center;justify-content:center;}
+  .addmodal.show{display:flex;}
+  .addbox{background:#0d0d0d;border:1px solid var(--amber);padding:14px 16px;
+    min-width:320px;max-width:480px;}
+  .addhd{color:var(--amber);font-weight:700;margin-bottom:10px;}
+  .addsecs{display:flex;flex-direction:column;gap:4px;margin-bottom:12px;
+    max-height:50vh;overflow:auto;}
+  .addsec{text-align:left;color:var(--white);background:#1a1a1a;border:none;
+    padding:5px 9px;cursor:pointer;font-family:var(--mono);font-size:13px;}
+  .addsec:hover{background:var(--amber);color:#000;}
+  .addsec.in{color:var(--green);}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+    background:#1a1a1a;border:1px solid var(--amber);color:var(--white);
+    padding:6px 14px;font-size:12px;z-index:50;display:none;white-space:nowrap;}
+  .toast.show{display:block;}
+  /* measure tool */
+  .btn.mon{background:var(--amber);color:#000;font-weight:700;}
+  .mbox{position:absolute;top:6px;left:8px;z-index:7;pointer-events:none;display:none;
+    background:#1a1a1a;border:1px solid var(--amber);padding:3px 9px;font-size:12px;white-space:nowrap;}
+  .mbox .m-hd{color:var(--amber);font-weight:700;margin-right:10px;}
+  .mbox .dim{color:var(--dim);margin-right:10px;}
+  .mbox .mv{color:var(--white);margin-right:10px;}
+  .mbox .up{color:var(--green);} .mbox .down{color:var(--red);}
+  /* custom "little cross" pointer + date/value tooltip */
+  .xhair{position:absolute;z-index:5;pointer-events:none;display:none;
+    width:15px;height:15px;transform:translate(-50%,-50%);}
+  .xhair::before,.xhair::after{content:"";position:absolute;background:var(--amber);}
+  .xhair::before{left:50%;top:0;width:1px;height:100%;transform:translateX(-50%);}
+  .xhair::after{top:50%;left:0;height:1px;width:100%;transform:translateY(-50%);}
+  .xtip{position:absolute;z-index:6;pointer-events:none;display:none;
+    background:#1a1a1a;border:1px solid #333;padding:2px 7px;font-size:11px;
+    white-space:nowrap;line-height:1.4;}
+  .xtip .td{color:var(--dim);margin-right:8px;} .xtip .tv{color:var(--amber);font-weight:700;}
+  @media print{
+    #titlebar,.btn,.tfbar,#cf-daterow,#sec-daterow{display:none!important;}
+    html,body{background:#fff!important;}
+    #chartview{height:auto!important;background:#fff!important;}
+    #chart-full{height:80vh!important;}
+    .ctitle,.crange{color:#111!important;}
+    .legend{color:#555!important;--price:#111;}
+  }
+</style>
+</head>
+<body>
+  <div id="splash">
+    <div class="splash-lockup">
+      <span class="splash-k">K</span>
+      <div class="splash-txt">
+        <div class="splash-name">Kessler-Katznelson</div>
+        <div class="splash-tag">Preserve and Grow</div>
+      </div>
+    </div>
+    <div class="splash-load"><span></span></div>
+  </div>
+  <div id="titlebar">
+    <span class="name">KESSLER-KATZNELSON TERMINAL</span>
+    <input id="cmd" placeholder="Command  (e.g. AAPL · AAPL GP 6M · AAPL FA · AAPL N · NEWS · PORT · MON)" autocomplete="off" />
+    <span class="clock" id="clock"></span>
+  </div>
+
+  <div id="monitor" class="view active"></div>
+
+  <div id="security" class="view">
+    <div class="sec-tophd">
+      <div class="sec-head" id="sec-head"></div>
+      <button class="btn add-btn" onclick="openAddModal(state.security.ticker)">Add to Dashboard</button>
+      <button class="btn" data-mbtn="sec-chart" onclick="toggleMeasure('sec-chart')">Measure</button>
+      <button class="btn" onclick="openCompareTickers(state.security.ticker,state.security.tf)">Compare</button>
+      <button class="btn" onclick="openCompareTf(state.security.ticker,state.security.tf)">Compare TF</button>
+      <button class="btn" onclick="showFinancials(state.security.ticker)">Financials</button>
+    </div>
+    <div id="sec-fund"></div>
+    <div id="sec-pe"></div>
+    <div class="chart-top"><div class="tfbar" id="sec-tfbar"></div><span class="crange" id="sec-range"></span><span class="ctitle" style="margin-left:auto">Chart</span></div>
+    <div class="daterow" id="sec-daterow"><input type="date" id="sec-from"><span class="dsep">→</span>
+      <input type="date" id="sec-to"><button class="btn" onclick="applyCustom('security')">Go</button></div>
+    <div class="legend" id="sec-legend"></div>
+    <div id="sec-chart"></div>
+    <div class="news-hd">NEWS</div>
+    <div class="news" id="sec-news"></div>
+  </div>
+
+  <div id="chartview" class="view">
+    <div class="chart-top">
+      <button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" data-mbtn="chart-full" onclick="toggleMeasure('chart-full')">Measure</button>
+      <span class="cinfo"><span class="ctitle" id="cf-title"></span><span id="cf-last"></span></span>
+      <div class="tfbar" id="cf-tfbar"></div>
+      <span class="crange" id="cf-range"></span>
+      <button class="btn add-btn" onclick="openAddModal(state.full.ticker)">Add to Dashboard</button>
+      <button class="btn" onclick="openCompareTickers(state.full.ticker,state.full.tf)">Compare</button>
+      <button class="btn" onclick="openCompareTf(state.full.ticker,state.full.tf)">Compare TF</button>
+      <button class="btn print-btn" onclick="doPrint()">Print</button>
+    </div>
+    <div class="daterow" id="cf-daterow"><input type="date" id="cf-from"><span class="dsep">→</span>
+      <input type="date" id="cf-to"><button class="btn" onclick="applyCustom('full')">Go</button></div>
+    <div class="legend" id="cf-legend"></div>
+    <div id="chart-full"></div>
+  </div>
+
+  <div id="compareview" class="view">
+    <div class="chart-top">
+      <button class="btn" onclick="showMonitor()">← Monitor</button>
+      <span class="ctitle" id="cmp-title">COMPARE</span>
+      <input id="cmp-add-ticker" class="cmp-input" placeholder="add ticker" autocomplete="off" />
+      <select id="cmp-add-tf" class="cmp-input" onchange="cmpTfSelChange()"></select>
+      <input type="date" id="cmp-add-from" class="cmp-input" style="display:none" />
+      <input type="date" id="cmp-add-to" class="cmp-input" style="display:none" />
+      <button class="btn" onclick="addCompareEntry()">+ Add</button>
+      <div class="tfbar" id="cmp-tfbar"></div>
+    </div>
+    <div class="legend" id="cmp-legend"></div>
+    <div id="cmp-chart"></div>
+  </div>
+
+  <div id="faview" class="view">
+    <div class="chart-top">
+      <button class="btn" onclick="faBack()">← Back</button>
+      <span class="ctitle" id="fa-title">FINANCIALS</span>
+    </div>
+    <div id="fa-body"></div>
+  </div>
+
+  <div id="portview" class="view">
+    <div class="chart-top">
+      <button class="btn" onclick="showMonitor()">← Monitor</button>
+      <span class="ctitle" id="pf-title">PORTFOLIO</span>
+    </div>
+    <div id="pf-body"></div>
+  </div>
+
+  <div id="newsview" class="view" style="padding:6px 12px;">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <span class="ctitle" id="nv-title">MARKET NEWS</span></div>
+    <div class="nb-sub" id="nv-sub"></div>
+    <div class="news" id="nv-news"></div>
+  </div>
+
+  <div id="readerview" class="view">
+    <div class="chart-top"><button class="btn" onclick="readerBack()">← Back</button>
+      <a class="btn" id="rd-ext" target="_blank" rel="noopener" href="#">Open original ↗</a></div>
+    <div id="rd-title"></div>
+    <div id="rd-meta"></div>
+    <div id="rd-body"></div>
+  </div>
+
+  <div id="addmodal" class="addmodal">
+    <div class="addbox">
+      <div class="addhd" id="add-hd"></div>
+      <div class="addsecs" id="add-secs"></div>
+      <button class="btn" onclick="closeAddModal()">Cancel</button>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+
+<script>
+const TFS=["1D","1W","1M","3M","6M","1Y","5Y","10Y","ALL"];
+const charts={};                 // id -> {chart, series...}
+const measureState={}, measureBox={};   // id -> measure-tool state / readout box
+const state={security:{ticker:"AAPL",tf:"1Y",custom:null},
+             full:{ticker:"AAPL",tf:"1Y",custom:null}};
+let lastRaw={};
+
+function clock(){const d=new Date();
+  document.getElementById("clock").textContent=
+    d.toLocaleDateString("en-US",{weekday:"short",day:"2-digit",month:"short",year:"numeric"})
+    +"  "+d.toLocaleTimeString("en-US",{hour12:false});}
+setInterval(clock,1000);clock();
+
+/* launch splash: fade out once the monitor first renders (min ~900ms, 6s fallback) */
+const splashStart=Date.now(); let splashDone=false;
+function hideSplash(){
+  if(splashDone)return; splashDone=true;
+  const wait=Math.max(0,5000-(Date.now()-splashStart));
+  setTimeout(()=>{const s=document.getElementById("splash"); if(!s)return;
+    s.classList.add("hide"); setTimeout(()=>s.remove(),650);},wait);
+}
+setTimeout(hideSplash,6000);
+
+function show(id){document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  document.getElementById(id).classList.add("active");}
+function showMonitor(){show("monitor");}
+
+/* ---------------- monitor (live WebSocket stream + polling fallback) ---------------- */
+function renderMonitor(data){
+  const mon=document.getElementById("monitor");
+  mon.style.gridTemplateColumns=`repeat(${data.ncols},1fr)`;
+  const cols={}; for(let i=0;i<data.ncols;i++)cols[i]=[];
+  data.sections.forEach(s=>cols[s.col].push(s));
+  let html="";
+  for(let c=0;c<data.ncols;c++){html+="<div>";
+    cols[c].forEach(sec=>{html+=`<div class="section"><div class="sec-hdr">${sec.title}</div>`;
+      sec.rows.forEach(r=>{const cls=r.up?"up":"down";const key=sec.title+"|"+r.label;
+        const clk=r.cmd?`class="lbl clk" onclick="run('${r.cmd}')"`:`class="lbl"`;
+        html+=`<div class="row"><span ${clk}>${r.label}</span>
+          <span class="price" data-k="${key}" data-raw="${r.raw}">${r.price}</span>
+          <span class="chg ${cls}">${r.chg}</span><span class="pct ${cls}">${r.pct}</span>
+          <span class="time">${r.time}</span></div>`;});
+      html+="</div>";});
+    html+="</div>";}
+  mon.innerHTML=html;
+  hideSplash();
+  mon.querySelectorAll(".price").forEach(el=>{const k=el.dataset.k,raw=parseFloat(el.dataset.raw);
+    if(k in lastRaw&&!isNaN(raw)&&raw!==lastRaw[k]){const cl=raw>lastRaw[k]?"flash-up":"flash-down";
+      el.classList.add(cl);setTimeout(()=>el.classList.remove(cl),600);}
+    if(!isNaN(raw))lastRaw[k]=raw;});
+}
+async function loadMonitor(){
+  let data; try{data=await(await fetch("/api/monitor")).json();}catch(e){return;}
+  renderMonitor(data);
+}
+function applyMonitorUpdate(rows){   // in-place cell updates pushed over the socket
+  for(const r of rows){
+    const sel=r.key.replace(/["\\]/g,"\\$&");
+    const price=document.querySelector(`.price[data-k="${sel}"]`);
+    if(!price)continue;
+    const raw=parseFloat(r.raw), old=lastRaw[r.key];
+    price.textContent=r.price; price.dataset.raw=r.raw;
+    if(old!==undefined&&!isNaN(raw)&&raw!==old){
+      const cl=raw>old?"flash-up":"flash-down";
+      price.classList.add(cl); setTimeout(()=>price.classList.remove(cl),600);
+    }
+    if(!isNaN(raw))lastRaw[r.key]=raw;
+    const row=price.parentElement, cls=r.up?"up":"down";
+    const chg=row.querySelector(".chg"), pct=row.querySelector(".pct"), tm=row.querySelector(".time");
+    if(chg){chg.textContent=r.chg; chg.className="chg "+cls;}
+    if(pct){pct.textContent=r.pct; pct.className="pct "+cls;}
+    if(tm){tm.textContent=r.time;}
+  }
+}
+let ws=null, wsRetry=0;
+function connectWS(){
+  try{ ws=new WebSocket((location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws"); }
+  catch(e){ scheduleWS(); return; }
+  ws.onopen=()=>{wsRetry=0;};
+  ws.onmessage=ev=>{ let m; try{m=JSON.parse(ev.data);}catch(_){return;}
+    if(m.type==="full")renderMonitor(m); else if(m.type==="update")applyMonitorUpdate(m.rows); };
+  ws.onclose=()=>{ scheduleWS(); };
+  ws.onerror=()=>{ try{ws.close();}catch(_){} };
+}
+function scheduleWS(){ wsRetry=Math.min(wsRetry+1,8); setTimeout(connectWS,400*wsRetry); }
+loadMonitor();          // instant first paint
+connectWS();            // then live stream
+setInterval(()=>{ if((!ws||ws.readyState!==1)&&document.getElementById("monitor").classList.contains("active"))loadMonitor(); },3000);
+
+/* ---------------- charts ---------------- */
+function getChart(id){
+  if(charts[id])return charts[id];
+  const chart=LightweightCharts.createChart(document.getElementById(id),{
+    autoSize:true,
+    layout:{background:{color:"#0a0a0a"},textColor:"#888",fontFamily:"monospace"},
+    grid:{vertLines:{color:"#1e1e1e"},horzLines:{color:"#1e1e1e"}},
+    rightPriceScale:{borderColor:"#333",scaleMargins:{top:0.05,bottom:0.26}},
+    timeScale:{borderColor:"#333",timeVisible:true,secondsVisible:false,minBarSpacing:0.04},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Magnet,
+               vertLine:{visible:false,labelVisible:false},
+               horzLine:{visible:false,labelVisible:false}},
+  });
+  // price + moving averages (original GP look: white price + SMA 50/100/200)
+  const sSma200=chart.addLineSeries({color:"#ff3b9a",lineWidth:1});
+  const sSma100=chart.addLineSeries({color:"#27d17e",lineWidth:1});
+  const sSma50=chart.addLineSeries({color:"#ffd400",lineWidth:1});
+  const sPrice=chart.addLineSeries({color:"#dadada",lineWidth:2,priceLineVisible:false,lastValueVisible:false});
+  // RSI(14) in a bottom sub-panel with 70/30 reference lines
+  const sRsi=chart.addLineSeries({color:"#34c3d6",lineWidth:1,priceScaleId:"rsi"});
+  chart.priceScale("rsi").applyOptions({scaleMargins:{top:0.80,bottom:0},borderColor:"#333"});
+  sRsi.createPriceLine({price:70,color:"#555",lineWidth:1,lineStyle:2,axisLabelVisible:false});
+  sRsi.createPriceLine({price:30,color:"#555",lineWidth:1,lineStyle:2,axisLabelVisible:false});
+  // little-cross pointer with a floating date/value tooltip (replaces full lines)
+  const host=document.getElementById(id); host.style.position="relative";
+  const cross=document.createElement("div"); cross.className="xhair";
+  const tip=document.createElement("div"); tip.className="xtip";
+  host.appendChild(cross); host.appendChild(tip);
+  const hide=()=>{cross.style.display="none";tip.style.display="none";};
+  chart.subscribeCrosshairMove(param=>{
+    const pd=param.time&&param.seriesData&&param.seriesData.get(sPrice);
+    if(!pd){hide();return;}
+    const val=pd.value!==undefined?pd.value:pd.close;
+    const x=chart.timeScale().timeToCoordinate(param.time), y=sPrice.priceToCoordinate(val);
+    if(x==null||y==null){hide();return;}
+    cross.style.left=x+"px"; cross.style.top=y+"px"; cross.style.display="block";
+    tip.innerHTML=`<span class="td">${xtipDate(param.time)}</span>`
+      +`<span class="tv">${val.toLocaleString(undefined,{maximumFractionDigits:2})}</span>`;
+    tip.style.display="block";
+    const hw=host.clientWidth, hh=host.clientHeight, tw=tip.offsetWidth, th=tip.offsetHeight;
+    tip.style.left=((x+14+tw>hw)?x-tw-14:x+14)+"px";
+    tip.style.top=((y+14+th>hh)?y-th-14:y+14)+"px";
+  });
+  // measure tool: click two points -> Δ value & %, connector line (green up / red down)
+  const sMeasure=chart.addLineSeries({color:"#888",lineWidth:2,priceLineVisible:false,
+    lastValueVisible:false,crosshairMarkerVisible:false}); sMeasure.setData([]);
+  measureState[id]=measureState[id]||{on:false,pts:[]};
+  const mbox=document.createElement("div"); mbox.className="mbox";
+  host.appendChild(mbox); measureBox[id]=mbox;
+  chart.subscribeClick(param=>{
+    const ms=measureState[id]; if(!ms.on||!param.time)return;
+    const pd=param.seriesData&&param.seriesData.get(sPrice);
+    const val=pd?(pd.value!==undefined?pd.value:pd.close)
+               :sPrice.coordinateToPrice(param.point&&param.point.y);
+    if(val==null)return;
+    if(ms.pts.length>=2)ms.pts=[];                 // third click starts fresh
+    ms.pts.push({time:param.time,value:val});
+    const sorted=[...ms.pts].sort((p,q)=>cmpTime(p.time,q.time));
+    sPrice.setMarkers(sorted.map(p=>({time:p.time,position:"inBar",color:"#ffaf00",
+      shape:"circle",text:p===ms.pts[0]?"A":"B"})));
+    if(ms.pts.length===2 && cmpTime(ms.pts[0].time,ms.pts[1].time)!==0){
+      const up=ms.pts[1].value>=ms.pts[0].value;   // direction = A -> B (click order)
+      sMeasure.applyOptions({color:up?"#13c56b":"#ff4d4d"});
+      sMeasure.setData(sorted.map(p=>({time:p.time,value:p.value})));
+    }else sMeasure.setData([]);
+    renderMeasure(id);
+  });
+  charts[id]={chart,sSma200,sSma100,sSma50,sPrice,sRsi,sMeasure};
+  return charts[id];
+}
+async function loadChartInto(id,ticker,tf,custom){
+  const c=getChart(id); endMeasure(id);
+  let url=`/api/chart?ticker=${encodeURIComponent(ticker)}`;
+  url += (custom&&custom.from&&custom.to) ? `&from=${custom.from}&to=${custom.to}` : `&tf=${tf}`;
+  let d; try{d=await(await fetch(url)).json();}catch(e){return null;}
+  c.sPrice.setData(d.price||[]);
+  c.sSma50.setData(d.sma50||[]);c.sSma100.setData(d.sma100||[]);c.sSma200.setData(d.sma200||[]);
+  c.sRsi.setData(d.rsi||[]);
+  applyInd(c);
+  c.chart.timeScale().fitContent();
+  return d;
+}
+/* indicator show/hide toggles (Price always on) */
+const indOn={sma50:false,sma100:false,sma200:false,rsi:false};
+const IND=[{k:"sma50",label:"SMA 50",color:"#ffd400"},{k:"sma100",label:"SMA 100",color:"#27d17e"},
+           {k:"sma200",label:"SMA 200",color:"#ff3b9a"},{k:"rsi",label:"RSI(14)",color:"#34c3d6"}];
+function renderLegend(id){
+  document.getElementById(id).innerHTML=`<span style="color:var(--price)">━ Price</span>`+
+    IND.map(o=>`<span class="legtog" onclick="toggleInd('${o.k}','${id}')" `+
+      `style="color:${indOn[o.k]?o.color:'#555'}">${indOn[o.k]?'☑':'☐'} ${o.label}</span>`).join("");
+}
+function toggleInd(k,id){indOn[k]=!indOn[k];renderLegend(id);applyIndAll();}
+function applyInd(c){
+  c.sSma50.applyOptions({visible:indOn.sma50});
+  c.sSma100.applyOptions({visible:indOn.sma100});
+  c.sSma200.applyOptions({visible:indOn.sma200});
+  c.sRsi.applyOptions({visible:indOn.rsi});
+  c.chart.priceScale("right").applyOptions({scaleMargins:{top:0.05,bottom:indOn.rsi?0.26:0.04}});
+}
+function applyIndAll(){Object.values(charts).forEach(applyInd);}
+/* re-theme chart canvas light/dark (light = for printing on white paper) */
+function setChartTheme(dark){
+  const bg=dark?"#0a0a0a":"#ffffff", txt=dark?"#888":"#222",
+        grid=dark?"#1e1e1e":"#dcdcdc", bord=dark?"#333":"#bbb",
+        price=dark?"#dadada":"#111";
+  Object.values(charts).forEach(c=>{
+    c.chart.applyOptions({layout:{background:{color:bg},textColor:txt},
+      grid:{vertLines:{color:grid},horzLines:{color:grid}},
+      rightPriceScale:{borderColor:bord},timeScale:{borderColor:bord}});
+    c.sPrice.applyOptions({color:price});
+  });
+}
+function doPrint(){            // whiten chart, let it repaint a frame, then print
+  setChartTheme(false);
+  setTimeout(()=>window.print(),150);
+}
+window.addEventListener("beforeprint",()=>setChartTheme(false)); // covers Ctrl+P
+window.addEventListener("afterprint",()=>setChartTheme(true));   // restore dark
+/* ---- measure tool ---- */
+function timeToDate(t){
+  if(typeof t==="number")return new Date(t*1000);
+  if(typeof t==="string"){const[y,m,d]=t.split("-");return new Date(Date.UTC(+y,+m-1,+d));}
+  return new Date(Date.UTC(t.year,t.month-1,t.day));}
+function cmpTime(a,b){return timeToDate(a)-timeToDate(b);}
+function fmtV(v){return v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function mSpan(t1,t2){const ms=Math.abs(timeToDate(t2)-timeToDate(t1)),days=Math.round(ms/864e5);
+  if(days>=1)return ` · ${days}d`;
+  const mins=Math.round(ms/6e4); return mins>=60?` · ${(mins/60).toFixed(1)}h`:` · ${mins}m`;}
+function renderMeasure(id){
+  const ms=measureState[id],box=measureBox[id]; if(!box)return;
+  if(!ms.on){box.style.display="none";return;}
+  if(ms.pts.length===0){
+    box.innerHTML=`<span class="m-hd">MEASURE</span><span class="dim">click two points on the chart…</span>`;
+    box.style.display="block";return;}
+  if(ms.pts.length===1){const a=ms.pts[0];
+    box.innerHTML=`<span class="m-hd">MEASURE</span><span class="dim">${xtipDate(a.time)} · ${fmtV(a.value)} — pick second point…</span>`;
+    box.style.display="block";return;}
+  const[a,b]=ms.pts,d=b.value-a.value,pct=a.value?(b.value/a.value-1)*100:0,
+        cls=d>=0?"up":"down",sg=d>=0?"+":"";
+  box.innerHTML=`<span class="m-hd">MEASURE</span>`
+    +`<span class="dim">${xtipDate(a.time)} → ${xtipDate(b.time)}${mSpan(a.time,b.time)}</span>`
+    +`<span class="mv">${fmtV(a.value)} → ${fmtV(b.value)}</span>`
+    +`<span class="${cls}">Δ ${sg}${fmtV(d)}  (${sg}${pct.toFixed(2)}%)</span>`;
+  box.style.display="block";}
+function toggleMeasure(id){
+  getChart(id);
+  const ms=measureState[id]||(measureState[id]={on:false,pts:[]});
+  if(ms.on){endMeasure(id);return;}
+  ms.on=true; ms.pts=[];
+  if(charts[id]){charts[id].sPrice.setMarkers([]);charts[id].sMeasure.setData([]);}
+  const btn=document.querySelector(`[data-mbtn="${id}"]`); if(btn)btn.classList.add("mon");
+  renderMeasure(id);}
+function endMeasure(id){
+  const ms=measureState[id]; if(!ms)return;
+  ms.on=false; ms.pts=[];
+  if(charts[id]){charts[id].sPrice.setMarkers([]);charts[id].sMeasure.setData([]);}
+  if(measureBox[id])measureBox[id].style.display="none";
+  const btn=document.querySelector(`[data-mbtn="${id}"]`); if(btn)btn.classList.remove("mon");}
+
+/* ---- compare (overlay, rebased to % change) ---- */
+const CMP_N=240;
+const CMP_COLORS=["#ffaf00","#34c3d6","#27d17e","#ff3b9a","#ffd400","#5fafd7","#ff7847","#b388ff"];
+let cmpMode="ticker", cmpTf="1Y", cmpList=[], cmpChart=null, cmpSeries=[], cmpIdSeq=0;
+function shortD(s){const[y,m]=s.split("-");return `${MON[+m-1]}'${y.slice(2)}`;}
+function getCmpChart(){
+  if(cmpChart)return cmpChart;
+  cmpChart=LightweightCharts.createChart(document.getElementById("cmp-chart"),{
+    autoSize:true,
+    layout:{background:{color:"#0a0a0a"},textColor:"#888",fontFamily:"monospace"},
+    grid:{vertLines:{color:"#1e1e1e"},horzLines:{color:"#1e1e1e"}},
+    rightPriceScale:{borderColor:"#333",scaleMargins:{top:0.08,bottom:0.08}},
+    timeScale:{borderColor:"#333",tickMarkFormatter:t=>Math.round(t/(CMP_N-1)*100)+"%"},
+    localization:{timeFormatter:t=>Math.round(t/(CMP_N-1)*100)+"% of window"},
+    crosshair:{vertLine:{color:"#ffaf00",labelVisible:false},
+               horzLine:{color:"#ffaf00",labelBackgroundColor:"#ffaf00"}},
+  });
+  return cmpChart;
+}
+function fmtCmpVal(v){                // absolute price next to the % in the legend
+  const a=Math.abs(v), dec=a>=1000?0:a>=1?2:4;
+  return v.toLocaleString(undefined,{minimumFractionDigits:dec,maximumFractionDigits:dec});}
+function cmpRebase(price){            // -> % change vs first point, resampled to CMP_N
+  const M=price.length; if(M<2)return [];
+  const v0=price[0].value, pct=price.map(p=>(p.value/v0-1)*100), out=[];
+  for(let j=0;j<CMP_N;j++){
+    const f=j/(CMP_N-1)*(M-1), lo=Math.floor(f), hi=Math.ceil(f), w=f-lo;
+    out.push({time:j, value:Math.round((pct[lo]*(1-w)+pct[hi]*w)*100)/100});
+  }
+  return out;
+}
+let cmpGen=0;
+async function renderCompare(){
+  const gen=++cmpGen;                                  // only the latest render commits
+  const entries=cmpList.slice();
+  const results=await Promise.all(entries.map(async e=>{
+    try{ const url=e.tf==="CUSTOM"
+        ? `/api/chart?ticker=${encodeURIComponent(e.ticker)}&from=${e.from}&to=${e.to}`
+        : `/api/chart?ticker=${encodeURIComponent(e.ticker)}&tf=${e.tf}`;
+      const d=await(await fetch(url)).json();
+      const price=d.price||[];
+      return {e, data:cmpRebase(price), lastVal:price.length?price[price.length-1].value:null, rate:!!d.rate}; }
+    catch(_){ return {e, data:[]}; }
+  }));
+  if(gen!==cmpGen)return;                              // superseded by a newer render
+  const chart=getCmpChart();
+  cmpSeries.forEach(o=>chart.removeSeries(o.series)); cmpSeries=[];
+  const leg=document.getElementById("cmp-legend"); leg.innerHTML="";
+  const overlay=cmpMode==="tf";              // per-window = auto-scaled SHAPE overlay
+  let i=0;
+  for(const {e,data,lastVal,rate} of results){
+    if(!data.length)continue;
+    const color=CMP_COLORS[i%CMP_COLORS.length];
+    const opts={color,lineWidth:2,priceLineVisible:false,lastValueVisible:!overlay,
+      priceFormat:{type:"custom",minMove:0.1,formatter:p=>(p>=0?"+":"")+p.toFixed(1)+"%"}};
+    if(overlay)opts.priceScaleId="cmp"+i;    // each on its own axis so shapes lay over each other
+    const s=chart.addLineSeries(opts);
+    s.setData(data);
+    if(overlay)chart.priceScale("cmp"+i).applyOptions(
+      {visible:false,autoScale:true,scaleMargins:{top:0.1,bottom:0.1}});
+    const endPct=data[data.length-1].value;
+    cmpSeries.push({series:s,entry:e});
+    const label=cmpMode==="tf"
+      ? (e.tf==="CUSTOM"?`${e.ticker} ${shortD(e.from)}→${shortD(e.to)}`:`${e.ticker} ${e.tf}`)
+      : e.ticker;
+    const valStr=(!rate&&lastVal!=null)?` <span class="cmp-val">${fmtCmpVal(lastVal)}</span>`:"";
+    leg.innerHTML+=`<span class="cmp-leg"><span style="color:${color}">━</span> ${esc(label)}${valStr} `
+      +`<span class="${endPct>=0?'up':'down'}">${endPct>=0?'+':''}${endPct.toFixed(1)}%</span>`
+      +`<span class="cmp-x" onclick="removeCompare(${e._id})">✕</span></span>`;
+    i++;
+  }
+  if(!overlay && cmpSeries.length)cmpSeries[0].series.createPriceLine(
+    {price:0,color:"#555",lineWidth:1,lineStyle:2,axisLabelVisible:false});
+  chart.priceScale("right").applyOptions({visible:!overlay});
+  chart.timeScale().fitContent();
+  document.getElementById("cmp-title").textContent=
+    overlay?"COMPARE · overlay (auto-scaled shapes)":`COMPARE · ${cmpTf} · % change`;
+}
+function renderCompareControls(){
+  const tfbar=document.getElementById("cmp-tfbar"), sel=document.getElementById("cmp-add-tf"),
+        from=document.getElementById("cmp-add-from"), to=document.getElementById("cmp-add-to");
+  if(cmpMode==="ticker"){
+    tfbar.style.display="flex"; sel.style.display="none"; from.style.display="none"; to.style.display="none";
+    tfbar.innerHTML=TFS.map(tf=>`<button class="tf ${tf===cmpTf?'active':''}" onclick="setCmpTf('${tf}')">${tf}</button>`).join("");
+  }else{
+    tfbar.style.display="none"; sel.style.display="";
+    sel.innerHTML=[...TFS,"CUSTOM"].map(tf=>`<option${tf==="1Y"?" selected":""}>${tf}</option>`).join("");
+    cmpTfSelChange();
+  }
+}
+function cmpTfSelChange(){
+  const custom=document.getElementById("cmp-add-tf").value==="CUSTOM";
+  document.getElementById("cmp-add-from").style.display=custom?"":"none";
+  document.getElementById("cmp-add-to").style.display=custom?"":"none";
+}
+function setCmpTf(tf){ cmpTf=tf; cmpList=cmpList.map(e=>({_id:e._id,ticker:e.ticker,tf})); renderCompareControls(); renderCompare(); }
+const cmpKey=e=>`${e.ticker}|${e.tf}|${e.from||""}|${e.to||""}`;
+function addCompareEntry(){
+  const t=document.getElementById("cmp-add-ticker").value.trim().toUpperCase(); if(!t)return;
+  let entry;
+  if(cmpMode==="tf" && document.getElementById("cmp-add-tf").value==="CUSTOM"){
+    const f=document.getElementById("cmp-add-from").value, to=document.getElementById("cmp-add-to").value;
+    if(!f||!to){alert("Pick both dates");return;}
+    entry={ticker:t,tf:"CUSTOM",from:(f<=to?f:to),to:(f<=to?to:f)};
+  }else{
+    entry={ticker:t,tf:cmpMode==="tf"?document.getElementById("cmp-add-tf").value:cmpTf};
+  }
+  document.getElementById("cmp-add-ticker").value="";
+  if(cmpList.some(e=>cmpKey(e)===cmpKey(entry))||cmpList.length>=8)return;
+  entry._id=++cmpIdSeq; cmpList.push(entry); renderCompare();
+}
+function removeCompare(id){ cmpList=cmpList.filter(e=>e._id!=id); renderCompare(); }
+function openCompareTickers(ticker,tf){ cmpMode="ticker"; cmpTf=TFS.includes(tf)?tf:"1Y";
+  cmpList=[{_id:++cmpIdSeq,ticker,tf:cmpTf}]; show("compareview"); renderCompareControls(); renderCompare(); }
+function openCompareTf(ticker,tf){ cmpMode="tf"; cmpList=[{_id:++cmpIdSeq,ticker,tf:TFS.includes(tf)?tf:"1Y"}];
+  show("compareview"); renderCompareControls(); renderCompare(); }
+
+/* ---- financials (FA) ---- */
+let faTicker=null;
+async function showFinancials(ticker){
+  faTicker=ticker; show("faview");
+  document.getElementById("fa-title").textContent=`${ticker} — FINANCIALS`;
+  const body=document.getElementById("fa-body"); body.innerHTML="<p class='dim'>Loading…</p>";
+  let d; try{ d=await(await fetch(`/api/financials?ticker=${encodeURIComponent(ticker)}`)).json(); }
+  catch(e){ body.innerHTML="<p class='dim'>Couldn't load financials.</p>"; return; }
+  if(d.type==="etf"){
+    body.innerHTML=faHoldingsTable(`${esc(d.ticker)} — Top ETF Holdings`,["#","HOLDING","TICKER","WEIGHT"],
+      (d.etf_holdings||[]).map((x,i)=>[`<span class="dim">${i+1}</span>`,esc(x.name||"?"),
+        `<span class="amber">${esc(x.symbol||"")}</span>`,esc(x.weight||"")]),
+      "Source: StockAnalysis · weights by portfolio allocation"); return; }
+  if(!d.statements||!d.statements.length){
+    body.innerHTML=`<p class="dim">No SEC financials found for ${esc(ticker)}.</p>`; return; }
+  const yrs=d.years||[]; let html="";
+  for(const st of d.statements){
+    html+=`<div class="fa-stmt"><div class="fa-stname">${esc(st.name)}</div><table class="fa-tab">`
+      +`<tr><td class="fa-lab"></td>`+yrs.map(y=>`<td class="fa-yr${y.partial?' partial':''}">${esc(y.label)}</td>`).join("")+`</tr>`;
+    for(const r of st.rows){
+      const c=r.kind==="fcf"?" fcf":"";
+      html+=`<tr><td class="fa-rowlab${c}">${esc(r.label)}</td>`
+        +r.cells.map(v=>`<td class="fa-val${c}">${esc(v)}</td>`).join("")+`</tr>`;
+    }
+    html+=`</table></div>`;
+  }
+  if(d.holders&&d.holders.rows&&d.holders.rows.length){
+    const title=`${esc(ticker)} — Top Institutional Holders`
+      +(d.holders.inst_pct?` <span class="dim">(${esc(d.holders.inst_pct)} institutional)</span>`:"");
+    html+=faHoldingsTable(title,["#","HOLDER","SHARES","VALUE ($K)","AS OF"],
+      d.holders.rows.map((h,i)=>[`<span class="dim">${i+1}</span>`,esc(h.name||"?"),
+        esc(h.shares||""),esc(h.value||""),`<span class="dim">${esc(h.date||"")}</span>`]),
+      "Source: Nasdaq (13F filings)");
+  }
+  html+=`<p class="fa-src">Source: SEC EDGAR XBRL · Free Cash Flow = Operating CF − CapEx`
+    +` · P/E (yr-end) = fiscal-year-end close ÷ diluted EPS`
+    +(d.partial_year?` · ${d.partial_year}·${d.partial_nq}Q = current year, ${d.partial_nq} quarter(s) filed`
+      +` (flows year-to-date; balance sheet as of latest quarter)`:"")+`</p>`;
+  body.innerHTML=html;
+}
+function faHoldingsTable(title,headers,rows,src){
+  let h=`<div class="fa-stmt"><div class="fa-stname">${title}</div><table class="fa-tab"><tr>`
+    +headers.map((x,i)=>`<td class="${i===1?'fa-lab2':'fa-yr'}">${esc(x)}</td>`).join("")+`</tr>`;
+  for(const r of rows)
+    h+=`<tr>`+r.map((c,i)=>`<td class="${i===1?'fa-rowlab2':'fa-val'}">${c}</td>`).join("")+`</tr>`;
+  return h+`</table></div><p class="fa-src">${esc(src)}</p>`;
+}
+function faBack(){ if(faTicker)showSecurity(faTicker); else showMonitor(); }
+
+/* ---- portfolio (PORT) ---- */
+async function showPortfolio(){
+  show("portview");
+  const body=document.getElementById("pf-body"); body.innerHTML="<p class='dim'>Loading…</p>";
+  let d; try{ d=await(await fetch("/api/portfolio")).json(); }
+  catch(e){ body.innerHTML="<p class='dim'>Couldn't load portfolio.</p>"; return; }
+  if(d.error){ body.innerHTML=`<p class="dim">${esc(d.error)}</p>`; return; }
+  document.getElementById("pf-title").textContent=`${esc(d.name)} — PORTFOLIO`;
+  const m=v=>`$${Math.round(v).toLocaleString()}`;
+  const m2=v=>`$${v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const sg=v=>`<span class="${v>=0?'up':'down'}">${v>=0?'+':'−'}$${Math.abs(Math.round(v)).toLocaleString()}</span>`;
+  const pctc=v=>`<span class="${v>=0?'up':'down'}">${v>=0?'+':''}${v.toFixed(1)}%</span>`;
+  let h="";
+  h+=`<div class="pf-net">NET LIQUID<span class="pf-big">${m2(d.net_liquid)}</span>`;
+  if(d.income)h+=`  <span class="dim">Treasury/cash income</span> <span class="up">${m(d.income)}/yr (${m(d.income_day)}/day)</span>`;
+  if(d.futures)h+=`  <span class="dim">futures P&amp;L</span> ${sg(d.fut_pnl)}`;
+  h+=`</div>`;
+  if(d.treasuries&&d.treasuries.length){
+    h+=`<div class="pf-sec">US TREASURIES <span class="dim">(live, marked to yields)</span></div><table class="pf-tab">`
+      +`<tr><td>NOTE</td><td>YTM</td><td>PRICE</td><td>MKT VALUE</td><td>Δ TODAY</td></tr>`;
+    for(const t of d.treasuries)
+      h+=`<tr><td class="pf-name">${esc(t.name)}</td><td>${t.ytm!=null?t.ytm.toFixed(2)+"%":"—"}</td>`
+        +`<td>${t.price.toFixed(2)}</td><td class="pf-val">${m(t.mv)}</td><td>${sg(t.dtoday)}</td></tr>`;
+    h+=`<tr class="pf-tot"><td>TREASURIES</td><td></td><td></td><td class="pf-val">${m(d.tre_mv)}</td><td>${sg(d.tre_daily)}</td></tr></table>`;
+  }
+  if(d.sleeves&&d.sleeves.length){
+    h+=`<div class="pf-sec">CASH / MONEY MARKET</div><table class="pf-tab">`
+      +`<tr><td>SLEEVE</td><td>VALUE</td><td>YIELD</td><td>EST. ANNUAL</td></tr>`;
+    for(const s of d.sleeves){
+      const y=s.rate!=null?`<span class="up">${s.rate.toFixed(2)}%</span>`:`<span class="dim">--</span>`;
+      const a=s.annual!=null?`<span class="up">${m(s.annual)}</span>`:`<span class="dim">--</span>`;
+      h+=`<tr><td class="pf-name">${esc(s.name)}</td><td class="pf-val">${m(s.amount)}</td><td>${y}</td><td>${a}</td></tr>`;
+    }
+    h+=`</table>`;
+  }
+  if(d.futures){ const f=d.futures;
+    h+=`<div class="pf-sec">FUTURES <span class="dim">(live)</span></div><table class="pf-tab">`
+      +`<tr><td>POSITION</td><td>LIVE PRICE</td><td>Δ vs ANCHOR</td><td>EQUITY NOW</td><td>P&amp;L SINCE START</td><td>RETURN</td></tr>`
+      +`<tr><td class="pf-name">${esc(f.desc)}</td>`
+      +`<td class="pf-val">${f.live?f.live.toLocaleString(undefined,{minimumFractionDigits:3,maximumFractionDigits:3}):"—"}</td>`
+      +`<td>${sg(f.move)}</td><td class="pf-val">${m(f.equity)}</td><td>${sg(f.pnl)}</td><td>${pctc(f.ret)}</td></tr></table>`;
+  }
+  if(d.since){ const s=d.since;
+    h+=`<div class="pf-since">SINCE INCEPTION <span class="dim">deposited ${m(s.deposited)} → net liquid ${m(s.net_liquid)}</span>  ${sg(s.change)} (${pctc(s.pct)})</div>`;
+  }
+  h+=`<p class="fa-src">Treasuries marked live to current yields · cash at live 3M rate (or stated). Edit holdings in portfolio.json</p>`;
+  body.innerHTML=h;
+}
+function tfButtons(barId,active,onclick,which){
+  document.getElementById(barId).innerHTML=TFS.map(tf=>
+    `<button class="tf ${tf===active?'active':''}" onclick="${onclick}('${tf}')">${tf}</button>`).join("")
+    +`<button class="tf ${active==='CUSTOM'?'active':''}" onclick="showCustom('${which}')">CUSTOM</button>`;
+}
+const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtD(s){const[y,m,d]=s.split("-");return `${MON[+m-1]} ${d}, ${y}`;}
+function xtipDate(t){            // crosshair time -> label (intraday=time, daily=date)
+  if(typeof t==="number"){const d=new Date(t*1000);
+    return d.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"UTC"});}
+  if(typeof t==="string")return fmtD(t);
+  return `${MON[t.month-1]} ${String(t.day).padStart(2,"0")}, ${t.year}`;}
+function updateRange(which){
+  const pre=which==="full"?"cf":"sec", c=state[which].custom;
+  document.getElementById(pre+"-range").textContent = (c&&c.from&&c.to)?`${fmtD(c.from)} → ${fmtD(c.to)}`:"";
+}
+function showCustom(which){
+  document.getElementById((which==="full"?"cf":"sec")+"-daterow").classList.toggle("show");
+}
+function applyCustom(which){
+  const pre=which==="full"?"cf":"sec";
+  const f=document.getElementById(pre+"-from").value, t=document.getElementById(pre+"-to").value;
+  if(!f||!t){alert("Pick both dates");return;}
+  state[which].custom = f<=t ? {from:f,to:t} : {from:t,to:f};
+  document.getElementById(pre+"-daterow").classList.remove("show");
+  if(which==="full"){showChart(state.full.ticker);}   // no tf -> keeps custom
+  else{tfButtons("sec-tfbar","CUSTOM","setSecTf","security");updateRange("security");
+       loadChartInto("sec-chart",state.security.ticker,null,state.security.custom);}
+}
+/* full chart view */
+async function showChart(ticker,tf){
+  state.full.ticker=ticker; if(tf){state.full.tf=tf;state.full.custom=null;}
+  show("chartview");
+  document.getElementById("cf-title").textContent=ticker;
+  tfButtons("cf-tfbar",state.full.custom?"CUSTOM":state.full.tf,"setFullTf","full");
+  updateRange("full");
+  renderLegend("cf-legend");
+  const d=await loadChartInto("chart-full",ticker,state.full.tf,state.full.custom);
+  if(d){document.getElementById("cf-title").textContent=d.display||ticker;
+    const p=d.price||[];if(p.length>1){const last=p[p.length-1].value,chg=(last/p[0].value-1)*100;
+      const lbl=state.full.custom?"CUSTOM":state.full.tf;
+      const el=document.getElementById("cf-last");el.textContent=`${last.toLocaleString()}  ${chg>=0?"+":""}${chg.toFixed(2)}%  ${lbl}`;
+      el.className=chg>=0?"up":"down";}}
+}
+function setFullTf(tf){showChart(state.full.ticker,tf);}
+
+/* security (ticker) page */
+async function showSecurity(ticker){
+  state.security.ticker=ticker; state.security.custom=null;
+  document.getElementById("sec-daterow").classList.remove("show");
+  show("security");
+  let d; try{d=await(await fetch(`/api/security?ticker=${encodeURIComponent(ticker)}`)).json();}catch(e){return;}
+  const cls=d.up?"up":"down";
+  document.getElementById("sec-head").innerHTML=
+    `<span class="sym">${d.ticker}</span><span class="nm">${d.name||d.display||""}</span>`+
+    (d.last?` <span class="${cls}" style="margin-left:10px;font-weight:700">${d.last} ${d.change||""} (${d.changePct||""})</span>`:"");
+  // fundamentals
+  document.getElementById("sec-fund").innerHTML = d.fields&&d.fields.length?
+    `<div class="fundgrid">`+d.fields.map(f=>`<div class="f"><span class="fk">${f.k}</span><span class="fv">${f.v}</span></div>`).join("")+`</div>`:"";
+  // P/E history
+  const pe=d.pe||[];
+  document.getElementById("sec-pe").innerHTML = pe.length?
+    `<div class="pe-wrap"><table class="pe-tab"><tr><td class="lab">${d.pe_label}</td>`+
+    pe.map(x=>`<td class="yr">${x.year}</td>`).join("")+`</tr><tr><td></td>`+
+    pe.map(x=>`<td class="val">${x.pe}x</td>`).join("")+`</tr></table></div>`:"";
+  // chart
+  tfButtons("sec-tfbar",state.security.tf,"setSecTf","security");
+  updateRange("security");
+  renderLegend("sec-legend");
+  loadChartInto("sec-chart",ticker,state.security.tf);
+  // news
+  loadNewsInto("sec-news",ticker);
+}
+function setSecTf(tf){state.security.tf=tf;state.security.custom=null;
+  document.getElementById("sec-daterow").classList.remove("show");
+  tfButtons("sec-tfbar",tf,"setSecTf","security");updateRange("security");
+  loadChartInto("sec-chart",state.security.ticker,tf);}
+
+/* news + in-app reader */
+const newsCache={}; let readerFrom="monitor";
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+async function loadNewsInto(elId,ticker){
+  let d; try{d=await(await fetch("/api/news"+(ticker?`?ticker=${encodeURIComponent(ticker)}`:""))).json();}catch(e){return;}
+  const items=d.items||[]; newsCache[elId]=items;
+  document.getElementById(elId).innerHTML=items.map((it,i)=>
+    `<div class="it"><span class="bull">• </span><span class="hl" onclick="openArticle('${elId}',${i})">${esc(it.title)}</span>`+
+    (it.source?` <span class="src">${esc(it.source)}</span>`:"")+(it.age?` <span class="age">${it.age}</span>`:"")+`</div>`).join("");
+}
+let newsMode="board", newsBoardTimer=null;
+function showNews(ticker){
+  if(!ticker)return showNewsBoard();
+  newsMode="ticker"; show("newsview");
+  document.getElementById("nv-sub").textContent="";
+  document.getElementById("nv-title").textContent=`NEWS — ${ticker}`;
+  loadNewsInto("nv-news",ticker);}
+async function showNewsBoard(){
+  newsMode="board"; show("newsview");
+  document.getElementById("nv-title").textContent="MARKET NEWS";
+  const el=document.getElementById("nv-news");
+  if(!el.querySelector(".nb-cols"))el.innerHTML="<p class='dim'>Loading…</p>";
+  renderNewsSub();
+  await loadNewsBoard();
+  clearInterval(newsBoardTimer);
+  newsBoardTimer=setInterval(()=>{
+    if(newsMode==="board" && document.getElementById("newsview").classList.contains("active"))
+      loadNewsBoard();
+  },90000);
+}
+function renderNewsSub(){
+  const d=new Date();
+  const t=d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"2-digit"})
+    +" "+d.toLocaleTimeString("en-US",{hour12:false,hour:"2-digit",minute:"2-digit"});
+  document.getElementById("nv-sub").textContent=
+    `${t}   ·   CNBC + Google News   ·   auto-refresh 90s   ·   click a headline to read it here`;
+}
+async function loadNewsBoard(){
+  const el=document.getElementById("nv-news");
+  let d; try{ d=await(await fetch("/api/news_board")).json(); }
+  catch(e){ if(!el.querySelector(".nb-cols"))el.innerHTML="<p class='dim'>Couldn't load news.</p>"; return; }
+  const secs=d.sections||[], flat=[]; secs.forEach(s=>s.items.forEach(it=>flat.push(it)));
+  newsCache["nv-board"]=flat;
+  let gi=0; const cols=[[],[]];
+  secs.forEach((s,si)=>{
+    let sec=`<div class="nb-sec"><div class="nb-head">▌ ${esc(s.heading)}</div>`;
+    for(const it of s.items){ const idx=gi++;
+      sec+=`<div class="nb-item"><span class="nb-title"><span class="bull">• </span>`
+        +`<span class="hl" onclick="openArticle('nv-board',${idx})">${esc(it.title)}</span></span>`
+        +`<span class="src">${esc(it.source||"")}</span><span class="age">${esc(it.age||"")}</span></div>`;
+    }
+    cols[si%2].push(sec+"</div>");
+  });
+  el.innerHTML=`<div class="nb-cols"><div class="nb-col">${cols[0].join("")}</div>`
+    +`<div class="nb-col">${cols[1].join("")}</div></div>`;
+  renderNewsSub();
+}
+async function openArticle(elId,i){
+  const it=(newsCache[elId]||[])[i]; if(!it)return;
+  readerFrom = elId==="sec-news" ? "security" : "newsview";
+  show("readerview");
+  document.getElementById("rd-title").textContent=it.title;
+  document.getElementById("rd-meta").textContent=(it.source||"")+(it.age?"  ·  "+it.age:"");
+  document.getElementById("rd-ext").href=it.link||"#";
+  document.getElementById("rd-body").innerHTML="<p class='dim'>Loading…</p>";
+  let a; try{a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json();}catch(e){a=null;}
+  if(a&&a.title)document.getElementById("rd-title").textContent=a.title;
+  const paras=(a&&a.paragraphs)||[];
+  document.getElementById("rd-body").innerHTML = paras.length
+    ? paras.map(p=>`<p>${esc(p)}</p>`).join("")
+    : `<p class="dim">Couldn't extract the full text here${a&&a.paywalled?" (the source may be paywalled)":""}. Use “Open original ↗”.</p>`;
+}
+function readerBack(){ show(readerFrom==="security"?"security":"newsview"); }
+
+/* ---------------- add to dashboard ---------------- */
+let addTicker=null, toastT=null;
+async function openAddModal(ticker){
+  if(!ticker)return;
+  addTicker=ticker;
+  document.getElementById("add-hd").textContent=`Add ${ticker} to dashboard — choose a sector`;
+  const wrap=document.getElementById("add-secs"); wrap.textContent="Loading…";
+  document.getElementById("addmodal").classList.add("show");
+  let d; try{d=await(await fetch(`/api/sections?ticker=${encodeURIComponent(ticker)}`)).json();}
+  catch(e){wrap.textContent="Couldn't load sectors";return;}
+  const added=new Set(d.added_in||[]), secs=d.sections||[];
+  wrap.innerHTML="";
+  if(!secs.length){wrap.textContent="No sectors available";return;}
+  secs.forEach(s=>{
+    const b=document.createElement("button");
+    b.className="addsec"+(added.has(s)?" in":"");
+    b.textContent=added.has(s)?`${s}  ✓ added`:s;
+    b.onclick=()=>confirmAdd(s);
+    wrap.appendChild(b);
+  });
+}
+function closeAddModal(){document.getElementById("addmodal").classList.remove("show");addTicker=null;}
+async function confirmAdd(section){
+  if(!addTicker)return; const t=addTicker;
+  try{
+    const r=await(await fetch("/api/add",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ticker:t,section})})).json();
+    closeAddModal();
+    flashToast(r.already?`${t} is already in ${section}`:`Added ${t} to ${section}`);
+  }catch(e){flashToast("Add failed");}
+}
+function flashToast(msg){const el=document.getElementById("toast");el.textContent=msg;
+  el.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove("show"),2400);}
+document.getElementById("addmodal").addEventListener("click",e=>{
+  if(e.target.id==="addmodal")closeAddModal();});
+document.getElementById("cmp-add-ticker").addEventListener("keydown",e=>{
+  if(e.key==="Enter"){e.stopPropagation();addCompareEntry();}});
+
+/* ---------------- command bar ---------------- */
+function run(raw){
+  const t=raw.trim().toUpperCase().split(/\s+/); if(!t[0])return;
+  const cmd=t[0];
+  if(["MON","HOME"].includes(cmd))return showMonitor();
+  if(["NEWS","WIRE"].includes(cmd))return showNews(null);
+  if(["PORT","PORTFOLIO","HOLDINGS","PNL"].includes(cmd))return showPortfolio();
+  const ticker=cmd, rest=t.slice(1), fn=rest[0];
+  if(["GP","CHART","G"].includes(fn)){const tf=rest.find(x=>TFS.includes(x))||"1Y";return showChart(ticker,tf);}
+  if(["N"].includes(fn))return showNews(ticker);
+  if(["FA","FIN"].includes(fn))return showFinancials(ticker);
+  return showSecurity(ticker);
+}
+const cmdEl=document.getElementById("cmd");
+cmdEl.addEventListener("keydown",e=>{
+  if(e.key==="Enter"){run(cmdEl.value);cmdEl.value="";}
+});
+/* ESC from ANYWHERE (any view, any focused field) → close a modal if open,
+   otherwise clear the command bar and jump home to the monitor. Capture phase so
+   nothing swallows it; works in the native desktop window too. */
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  if(document.getElementById("addmodal").classList.contains("show")){closeAddModal();e.preventDefault();return;}
+  cmdEl.value="";
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+  showMonitor();
+  e.preventDefault();
+},true);
+</script>
+</body>
+</html>

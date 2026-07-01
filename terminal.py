@@ -2162,5 +2162,28 @@ img {{ display:block; margin:6px 0 12px 0; border:1px solid #ddd; }}
             webbrowser.open(url)
 
 
+def _maybe_launch_web():
+    """On Windows, once the web-app files are present, hand off to the browser-based
+    terminal instead of this TUI (charts render natively — no sixel needed). Set
+    env MKT_TUI=1 to force the classic TUI. No-op on macOS (Mac keeps the TUI here;
+    its dock app launches webapp/app.py directly)."""
+    if os.name != "nt" or os.environ.get("MKT_TUI"):
+        return False
+    here = os.path.dirname(os.path.abspath(__file__))
+    app = os.path.join(here, "webapp", "app.py")
+    if not os.path.exists(app):
+        return False
+    import subprocess
+    flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen([_sys.executable, app], cwd=here, close_fds=True,
+                         creationflags=flags)
+        return True
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
+    if _maybe_launch_web():
+        _sys.exit(0)
     MarketTerminal().run()

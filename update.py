@@ -94,6 +94,19 @@ def _ensure_deps():
                            timeout=120)
         except Exception as e:
             print(f"  update: plotext install skipped — {e}")
+    # Web terminal: a native window on Windows needs pywebview (Edge WebView2).
+    # Best-effort — if it won't install, the web app just opens in the browser.
+    if os.name == "nt":
+        try:
+            import webview  # noqa: F401
+        except Exception:
+            print("  update: installing native-window support (pywebview)…")
+            try:
+                import subprocess
+                subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pywebview"],
+                               timeout=180)
+            except Exception as e:
+                print(f"  update: pywebview install skipped — {e}")
 
 
 def main():
@@ -107,30 +120,48 @@ def main():
         return
     remote = int(manifest.get("version", 0))
     local = _local_version()
-    if remote <= local:
+
+    def _safe(fn):
+        # relative paths only — no absolute, no ".." traversal, no hidden
+        # files/dirs (protects .fred_key/.appversion/portfolio.json). Subfolders OK.
+        parts = fn.replace("\\", "/").split("/")
+        return not (not fn or fn.startswith(("/", "\\")) or ".." in parts
+                    or "" in parts or any(p.startswith(".") for p in parts))
+
+    safe = [fn for fn in manifest.get("files", []) if _safe(fn)]
+    missing = [fn for fn in safe
+               if not os.path.exists(os.path.join(HERE, *fn.split("/")))]
+
+    if remote > local:
+        targets, bump = safe, True                # new version: refresh everything
+        print(f"  update: v{local} -> v{remote}, downloading…")
+    elif missing:
+        # same version, but files an older updater couldn't fetch (e.g. a new
+        # subfolder) are missing — self-heal without bumping the version.
+        targets, bump = missing, False
+        print(f"  update: fetching {len(missing)} missing file(s)…")
+    else:
         print(f"  update: up to date (v{local})")
         return
-    print(f"  update: v{local} -> v{remote}, downloading…")
+
     ok = True
-    for fn in manifest.get("files", []):
-        if not fn or "/" in fn or "\\" in fn or fn.startswith("."):  # safety: bare names only
-            continue
+    for fn in targets:
+        dst = os.path.join(HERE, *fn.split("/"))
         try:
-            data = _get(base + fn)
-            tmp = os.path.join(HERE, fn + ".new")
+            data = _get(base + "/".join(fn.split("/")))
+            os.makedirs(os.path.dirname(dst) or HERE, exist_ok=True)
+            tmp = dst + ".new"
             with open(tmp, "wb") as f:
                 f.write(data)
-            os.replace(tmp, os.path.join(HERE, fn))   # atomic swap
+            os.replace(tmp, dst)   # atomic swap
             print(f"    ✓ {fn}")
         except Exception as e:
             print(f"    ✗ {fn} — {e}")
             ok = False
-    if ok:
+    if ok and bump:
         with open(VFILE, "w") as f:
             f.write(str(remote))
-        print(f"  update: done (now v{remote}).")
-    else:
-        print("  update: some files failed — keeping current version.")
+    print("  update: done." if ok else "  update: some failed — will retry next launch.")
 
 
 if __name__ == "__main__":
