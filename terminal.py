@@ -983,7 +983,7 @@ HELP = """\
    AAPL N                   news headlines
    BTC GP                   crypto works too (BTC ETH SOL XRP DOGE ADA ...)
    DOW GP · SPX GP · NASDAQ GP   indices (Dow/S&P via ETF, Nasdaq at real level)
-   FEDFUNDS GP · US10Y GP · US2Y GP · 2S10S GP   rates & yields (FRED, decades back)
+   FDTR GP · US10Y GP · US2Y GP · 2S10S GP   rates & yields (FRED, decades back)
    DELINQ-CRE GP · DELINQ-CC GP · CHARGEOFF-CC GP   loan delinquency & charge-off rates
    CPI GP · CORECPI GP · UNRATE GP · PAYROLLS GP · WAGES GP   BLS economic data
    AUCTIONS                 recent US Treasury auction results (yield, bid/cover)

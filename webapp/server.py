@@ -10,6 +10,7 @@ then open http://127.0.0.1:8787
 """
 import asyncio
 import calendar
+import hashlib
 import html
 import json
 import os
@@ -19,6 +20,7 @@ import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
@@ -600,6 +602,220 @@ async def _treasury_auctions_section(session):
     return {"name": "US TREASURY AUCTIONS", "items": items}
 
 
+# ---- U.S. economic releases (CPI, jobs report, JOLTS, ADP, PPI, PCE, ...) ----
+# BLS and ADP bot-wall their sites AND their RSS feeds outright (Akamai 403s even
+# with full browser headers), so the numbers come from FRED instead: the latest
+# observations of each report's headline series, plus the report's real release
+# dates (past and scheduled) from FRED's release calendar. Items are blurbs — the
+# reader shows the data block in-app instead of fetching a bot-walled page.
+FRED_RELEASE_DATES = "https://api.stlouisfed.org/fred/release/dates"
+
+
+def _pct(v, signed=False):
+    return f"{v:+.1f}%" if signed else f"{v:.1f}%"
+
+
+def _jobs_k(v):
+    return f"{v:+.0f}k"
+
+
+# Per report: FRED release_id (for the release-date calendar), headline series
+# (key -> (series_id, units); pc1 = YoY %, pch = period % change, chg = change),
+# a compact title, detail rows for the reader, and which key's trend to show.
+ECON_RELEASES = [
+    {"long": "Consumer Price Index", "src": "BLS", "release_id": 10,
+     "link": "https://www.bls.gov/news.release/cpi.nr0.htm",
+     "series": {"head": ("CPIAUCSL", "pc1"), "core": ("CPILFESL", "pc1"),
+                "mom": ("CPIAUCSL", "pch")},
+     "title": lambda v, ref: (f"CPI · {ref}: {_pct(v['head'])} y/y · core "
+                              f"{_pct(v['core'])} · {_pct(v['mom'], True)} m/m"),
+     "rows": [("Headline CPI", "head", lambda v: _pct(v) + " y/y"),
+              ("Core CPI (ex food & energy)", "core", lambda v: _pct(v) + " y/y"),
+              ("Month-on-month", "mom", lambda v: _pct(v, True))],
+     "hist": "head", "hist_label": "Headline y/y trend"},
+    {"long": "Employment Situation (jobs report)", "src": "BLS", "release_id": 50,
+     "link": "https://www.bls.gov/news.release/empsit.nr0.htm",
+     "series": {"nfp": ("PAYEMS", "chg"), "unrate": ("UNRATE", "lin"),
+                "wages": ("CES0500000003", "pc1")},
+     "title": lambda v, ref: (f"Jobs Report · {ref}: {_jobs_k(v['nfp'])} payrolls · "
+                              f"{_pct(v['unrate'])} unemployment"),
+     "rows": [("Nonfarm payrolls", "nfp", lambda v: _jobs_k(v) + " m/m"),
+              ("Unemployment rate", "unrate", _pct),
+              ("Avg hourly earnings", "wages", lambda v: _pct(v) + " y/y")],
+     "hist": "nfp", "hist_label": "Payrolls m/m trend", "hist_fmt": _jobs_k},
+    # NOTE: the ADP series is in persons (PAYEMS-style series are in thousands).
+    {"long": "ADP National Employment Report", "src": "ADP", "release_id": 194,
+     "link": "https://adpemploymentreport.com/",
+     "series": {"adp": ("ADPMNUSNERSA", "chg")},
+     "title": lambda v, ref: f"ADP Employment · {ref}: {_jobs_k(v['adp'] / 1000)} private payrolls",
+     "rows": [("Private payrolls", "adp", lambda v: _jobs_k(v / 1000) + " m/m")],
+     "hist": "adp", "hist_label": "Private payrolls m/m trend",
+     "hist_fmt": lambda v: _jobs_k(v / 1000)},
+    {"long": "Job Openings and Labor Turnover Survey", "src": "BLS", "release_id": 192,
+     "link": "https://www.bls.gov/news.release/jolts.nr0.htm",
+     "series": {"open": ("JTSJOL", "lin"), "quits": ("JTSQUR", "lin")},
+     "title": lambda v, ref: (f"JOLTS · {ref}: {v['open'] / 1000:.1f}M job openings · "
+                              f"quits rate {_pct(v['quits'])}"),
+     "rows": [("Job openings", "open", lambda v: f"{v / 1000:.2f}M"),
+              ("Quits rate", "quits", _pct)],
+     "hist": "open", "hist_label": "Openings (M) trend",
+     "hist_fmt": lambda v: f"{v / 1000:.1f}"},
+    {"long": "Producer Price Index (final demand)", "src": "BLS", "release_id": 46,
+     "link": "https://www.bls.gov/news.release/ppi.nr0.htm",
+     "series": {"head": ("PPIFIS", "pc1"), "mom": ("PPIFIS", "pch")},
+     "title": lambda v, ref: (f"PPI · {ref}: {_pct(v['head'])} y/y · "
+                              f"{_pct(v['mom'], True)} m/m"),
+     "rows": [("PPI final demand", "head", lambda v: _pct(v) + " y/y"),
+              ("Month-on-month", "mom", lambda v: _pct(v, True))],
+     "hist": "head", "hist_label": "PPI y/y trend"},
+    {"long": "PCE inflation (Personal Income & Outlays)", "src": "BEA", "release_id": 54,
+     "link": "https://www.bea.gov/data/income-saving/personal-income",
+     "series": {"head": ("PCEPI", "pc1"), "core": ("PCEPILFE", "pc1")},
+     "title": lambda v, ref: (f"PCE Inflation · {ref}: {_pct(v['head'])} y/y · core "
+                              f"{_pct(v['core'])}"),
+     "rows": [("Headline PCE", "head", lambda v: _pct(v) + " y/y"),
+              ("Core PCE (Fed's gauge)", "core", lambda v: _pct(v) + " y/y")],
+     "hist": "core", "hist_label": "Core y/y trend"},
+    {"long": "Advance Retail Sales", "src": "Census", "release_id": 9,
+     "link": "https://www.census.gov/retail/sales.html",
+     "series": {"mom": ("RSAFS", "pch"), "yoy": ("RSAFS", "pc1")},
+     "title": lambda v, ref: (f"Retail Sales · {ref}: {_pct(v['mom'], True)} m/m · "
+                              f"{_pct(v['yoy'])} y/y"),
+     "rows": [("Month-on-month", "mom", lambda v: _pct(v, True)),
+              ("Year-on-year", "yoy", _pct)],
+     "hist": "mom", "hist_label": "m/m trend", "hist_fmt": lambda v: _pct(v, True)},
+    {"long": "Gross Domestic Product", "src": "BEA", "release_id": 53, "q": True,
+     "link": "https://www.bea.gov/data/gdp/gross-domestic-product",
+     "series": {"gdp": ("A191RL1Q225SBEA", "lin")},
+     "title": lambda v, ref: f"GDP · {ref}: {_pct(v['gdp'], True)} q/q annualized",
+     "rows": [("Real GDP (q/q SAAR)", "gdp", lambda v: _pct(v, True))],
+     "hist": "gdp", "hist_label": "q/q SAAR trend", "hist_fmt": lambda v: _pct(v, True)},
+]
+
+
+def _ref_label(date_str, quarterly=False):
+    dt = datetime.fromisoformat(date_str)
+    if quarterly:
+        return f"Q{(dt.month - 1) // 3 + 1} {dt.year}"
+    return dt.strftime("%b %Y")
+
+
+async def _fred_latest(session, series_id, units="lin", n=8):
+    """Newest n observations of a FRED series as (date, value), newest first."""
+    key = td._fred_key()
+    if not key:
+        return []
+    params = {"series_id": series_id, "api_key": key, "file_type": "json",
+              "sort_order": "desc", "limit": n, "units": units}
+    try:
+        async with session.get(td.FRED_OBS, params=params,
+                               timeout=aiohttp.ClientTimeout(total=12)) as r:
+            data = await r.json(content_type=None)
+    except Exception:
+        return []
+    out = []
+    for o in data.get("observations", []):
+        v = o.get("value")
+        if v in (".", "", None):
+            continue
+        try:
+            out.append((o["date"], float(v)))
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
+async def _fred_release_dates(session, release_id):
+    """(most_recent_past, next_scheduled) dates for a FRED release; either may be None."""
+    key = td._fred_key()
+    if not key:
+        return None, None
+    params = {"release_id": release_id, "api_key": key, "file_type": "json",
+              "sort_order": "desc", "limit": 30,
+              "include_release_dates_with_no_data": "true"}
+    try:
+        async with session.get(FRED_RELEASE_DATES, params=params,
+                               timeout=aiohttp.ClientTimeout(total=12)) as r:
+            data = await r.json(content_type=None)
+    except Exception:
+        return None, None
+    today = datetime.now().date().isoformat()
+    past = nxt = None
+    for d in data.get("release_dates", []):     # newest first
+        if d["date"] > today:
+            nxt = d["date"]                     # keeps shrinking toward the soonest
+        else:
+            past = d["date"]
+            break
+    return past, nxt
+
+
+_ECON_REL_CACHE = {"t": None, "sec": None}      # data moves daily at most; 15-min TTL
+
+
+async def _econ_releases_section(session):
+    """One section: the latest headline numbers of each major U.S. economic report."""
+    if not td._fred_key():
+        return None
+    now = datetime.now()
+    if _ECON_REL_CACHE["t"] and (now - _ECON_REL_CACHE["t"]).total_seconds() < 900:
+        return _ECON_REL_CACHE["sec"]
+    pairs = sorted({sw for rep in ECON_RELEASES for sw in rep["series"].values()})
+    results = await asyncio.gather(
+        *[_fred_latest(session, sid, units) for sid, units in pairs],
+        *[_fred_release_dates(session, rep["release_id"]) for rep in ECON_RELEASES])
+    obs = dict(zip(pairs, results[:len(pairs)]))
+    rel = {rep["release_id"]: results[len(pairs) + i]
+           for i, rep in enumerate(ECON_RELEASES)}
+    items = []
+    for rep in ECON_RELEASES:
+        vals, dates = {}, {}
+        for k, sw in rep["series"].items():
+            series = obs.get(sw) or []
+            if series:
+                dates[k], vals[k] = series[0]
+        if rep["hist"] not in vals:             # headline series unavailable — skip
+            continue
+        ref = _ref_label(dates[rep["hist"]], rep.get("q", False))
+        try:
+            title = rep["title"](vals, ref)
+        except (KeyError, TypeError):
+            title = f"{rep['long']} · {ref}"
+        lines = [f"{rep['long']} ({rep['src']})", f"Reference period: {ref}", ""]
+        for label, k, fmt in rep["rows"]:
+            if k in vals:
+                lines.append(f"{label:<28}{fmt(vals[k])}")
+        hseries = obs.get(rep["series"][rep["hist"]]) or []
+        if len(hseries) > 1:
+            hfmt = rep.get("hist_fmt", lambda v: f"{v:.1f}")
+            trail = []
+            for d, v in reversed(hseries[:7]):
+                dt = datetime.fromisoformat(d)
+                lbl = (f"Q{(dt.month - 1) // 3 + 1}" if rep.get("q")
+                       else dt.strftime("%b"))
+                trail.append(f"{lbl} {hfmt(v)}")
+            lines += ["", f"{rep['hist_label']}:  " + " · ".join(trail)]
+        released, nxt = rel.get(rep["release_id"]) or (None, None)
+        meta = ""
+        if released:
+            rd = datetime.fromisoformat(released).date()
+            dd = (now.date() - rd).days
+            meta = rd.strftime("%b %d") + (" · today" if dd == 0 else f" · {dd}d")
+            lines += ["", f"Released: {rd.strftime('%b %d, %Y')}"]
+        if nxt:
+            lines.append(f"Next release: {datetime.fromisoformat(nxt).strftime('%b %d, %Y')}")
+        lines += ["", "Data via FRED (St. Louis Fed)."]
+        items.append((released or "", {"kind": "blurb", "title": title, "meta": meta,
+                                       "author": rep["src"], "body": "\n".join(lines),
+                                       "link": rep["link"]}))
+    if not items:
+        return None                             # transient failure — don't cache
+    items.sort(key=lambda x: x[0], reverse=True)
+    sec = {"name": "U.S. ECONOMIC RELEASES", "items": [it for _, it in items]}
+    _ECON_REL_CACHE.update(t=now, sec=sec)
+    return sec
+
+
 async def api_research(request):
     """Research view: saved files (drop into research/) + public feeds."""
     RESEARCH_DIR.mkdir(exist_ok=True)
@@ -620,11 +836,15 @@ async def api_research(request):
     # Own session with raised header limits: some gov sites send oversized CSP headers
     # that trip aiohttp's default 8190-byte cap (same issue BMO's sitemap has).
     async with aiohttp.ClientSession(max_line_size=65536, max_field_size=65536) as econ:
-        # Order: Rosenberg (above) → BMO → Adam Taggart → Fed → Data&Budget →
-        # Treasury auctions → Academic → Global.
+        # Order: Rosenberg (above) → Adam Taggart → U.S. economic releases →
+        # Fed → Data&Budget → Treasury auctions → Academic → Global.
+        # NOTE: BMO Insights was removed — it's proprietary bank content with no official
+        # feed, they now block automated access (requests time out), and scraping/reproducing
+        # it risked trouble. Only public-sector feeds + a public RSS (Taggart) remain.
         econ_tasks = [_econ_group_section(econ, g) for g in ECON_GROUPS]
-        tasks = [_bmo_insights_section()]
+        tasks = []
         tasks += [_research_feed(session, f) for f in RESEARCH_FEEDS]
+        tasks.append(_econ_releases_section(econ))   # CPI/jobs/JOLTS/ADP/... via FRED
         tasks += econ_tasks[:2]                      # FEDERAL RESERVE, U.S. DATA & BUDGET
         tasks.append(_treasury_auctions_section(econ))
         tasks += econ_tasks[2:]                      # ACADEMIC RESEARCH, GLOBAL
@@ -878,6 +1098,8 @@ def _yield(sym):
 
 
 async def api_portfolio(request):
+    if os.environ.get("MKT_NO_PORT"):              # portfolio disabled in this deploy
+        return web.json_response({"error": "portfolio disabled"}, status=404)
     try:
         pf = json.loads(PORT_FILE.read_text())
     except Exception:
@@ -963,10 +1185,123 @@ def _greeting_name():
     return name.split()[0] if name else ""
 
 
+# --- optional password gate (enabled only when MKT_PASSWORD is set, i.e. in the
+# cloud). Local runs leave it unset, so nothing changes there. ---
+def _auth_token():
+    pw = os.environ.get("MKT_PASSWORD", "")
+    return hashlib.sha256(("kkt:" + pw).encode()).hexdigest() if pw else None
+
+
+_LOGIN_HTML = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kessler-Katznelson Terminal</title>
+<style>html,body{height:100%;margin:0;background:#0a0a0a;color:#e0a63c;
+font:15px/1.5 ui-monospace,Menlo,monospace;display:flex;align-items:center;justify-content:center}
+form{text-align:center;padding:28px 30px;border:1px solid #4a3a15;border-radius:8px;background:#111}
+h1{font-size:16px;letter-spacing:.08em;margin:0 0 18px}
+input{background:#1a1a1a;border:1px solid #2a2a2a;color:#fff;font:15px ui-monospace,monospace;
+padding:10px 12px;width:220px;outline:none;border-radius:4px}
+button{margin-top:12px;display:block;width:100%;background:#e0a63c;color:#000;border:0;font-weight:700;
+padding:10px;border-radius:4px;cursor:pointer;font-family:inherit}
+.err{color:#ff6b6b;font-size:12px;margin-top:10px;min-height:14px}</style>
+<form method="post" action="/login">
+<h1>KESSLER-KATZNELSON TERMINAL</h1>
+<input type="password" name="password" placeholder="password" autofocus autocomplete="current-password">
+<button type="submit">Enter</button>
+<div class="err">{{ERR}}</div>
+</form>"""
+
+
+_COOKIE_MAXAGE = 10 * 365 * 24 * 3600           # ~10 years: log in once, stay in
+
+
+def _set_auth(resp, token):
+    resp.set_cookie("kkt_auth", token, max_age=_COOKIE_MAXAGE, httponly=True, samesite="Lax")
+    return resp
+
+
+@web.middleware
+async def auth_mw(request, handler):
+    token = _auth_token()
+    if not token:                                  # no password set -> open (local)
+        return await handler(request)
+    # PWA icons + manifest must load WITHOUT the login cookie — iOS fetches the
+    # home-screen icon in a cookieless context, so gating /static/ breaks the K logo.
+    # There's no data under /static/ (it's just the shell + assets); /api stays gated.
+    # The dynamic manifest handler decides for itself what to reveal based on cookies.
+    if request.path.startswith("/static/") or request.path == "/app.webmanifest":
+        return await handler(request)
+    pw = os.environ.get("MKT_PASSWORD", "")
+    # already-remembered device
+    if request.cookies.get("kkt_auth") == token:
+        return await handler(request)
+    # magic link: any URL with ?k=<password> remembers this device forever, then
+    # redirects to a clean URL. Bookmark it once and never type the password again.
+    if request.query.get("k", "") == pw:
+        resp = _set_auth(web.HTTPFound(request.path or "/"), token)
+        if request.query.get("u"):     # ?u=<name> on the magic link also sets the greeting
+            resp.set_cookie("kkt_name", request.query.get("u"),
+                            max_age=_COOKIE_MAXAGE, samesite="Lax")
+        return resp
+    if request.path == "/login":
+        if request.method == "POST" and (await request.post()).get("password", "") == pw:
+            return _set_auth(web.HTTPFound("/"), token)
+        err = "Wrong password." if request.method == "POST" else ""
+        return web.Response(text=_LOGIN_HTML.replace("{{ERR}}", err),
+                            content_type="text/html", status=401 if err else 200)
+    if request.path.startswith(("/api", "/ws")):   # don't redirect data/socket calls
+        return web.Response(status=401, text="auth required")
+    return web.HTTPFound("/login")
+
+
 async def index(request):
-    html = (HERE / "static" / "index.html").read_text(encoding="utf-8")
-    return web.Response(text=html.replace("{{GREETING_NAME}}", _greeting_name()),
-                        content_type="text/html")
+    page = (HERE / "static" / "index.html").read_text(encoding="utf-8")
+    # tell the frontend whether the portfolio (PORT) view is disabled in this deploy
+    cfg = "<script>window.NO_PORT=%s;</script>" % (
+        "true" if os.environ.get("MKT_NO_PORT") else "false")
+    # per-device greeting: ?u=<name> sets & remembers it, else the saved cookie, else env/file
+    who = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
+    page = page.replace("{{GREETING_NAME}}", html.escape(who or "", quote=True)) \
+               .replace("{{APP_CONFIG}}", cfg)
+    resp = web.Response(text=page, content_type="text/html")
+    if request.query.get("u"):
+        resp.set_cookie("kkt_name", request.query.get("u"),
+                        max_age=_COOKIE_MAXAGE, samesite="Lax")
+    return resp
+
+
+_MANIFEST_BASE = {
+    "name": "Kessler-Katznelson Terminal",
+    "short_name": "Kessler-Katznelson",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#000000",
+    "theme_color": "#000000",
+    "icons": [
+        {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    ],
+}
+
+
+async def app_manifest(request):
+    """Dynamic web-app manifest. For an ALREADY-authenticated request we bake an
+    auto-login magic link into start_url, so the iOS home-screen app (which gets its
+    own cookie jar, separate from Safari) logs itself in and greets by name — no
+    password ever. Anonymous fetches get a plain start_url, so the token never leaks.
+    Requires crossorigin="use-credentials" on the <link rel="manifest"> so the browser
+    sends the cookie when fetching this."""
+    m = dict(_MANIFEST_BASE)
+    token = _auth_token()
+    authed = (not token) or (request.cookies.get("kkt_auth") == token)
+    if token and authed:
+        pw = os.environ.get("MKT_PASSWORD", "")
+        name = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
+        m["start_url"] = "/?k=" + quote(pw) + (("&u=" + quote(name)) if name else "")
+    else:
+        m["start_url"] = "/"
+    return web.json_response(m, content_type="application/manifest+json")
 
 
 async def on_start(app):
@@ -985,10 +1320,11 @@ async def on_cleanup(app):
 
 
 def make_app():
-    app = web.Application()
+    app = web.Application(middlewares=[auth_mw])
     app["tasks"] = []
     app["ws_clients"] = set()
     app.router.add_get("/", index)
+    app.router.add_get("/app.webmanifest", app_manifest)
     app.router.add_get("/ws", api_ws)
     app.router.add_get("/api/monitor", api_monitor)
     app.router.add_get("/api/sections", api_sections)

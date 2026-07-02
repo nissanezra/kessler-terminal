@@ -239,6 +239,8 @@ def _fred_key():
 
 
 FRED_CHART = {
+    # FDTR = Bloomberg's fed funds ticker (charts the effective rate, like the rest)
+    "FDTR": ("DFF", "FED FUNDS RATE %"),
     "FEDFUNDS": ("DFF", "FED FUNDS RATE %"), "FFR": ("DFF", "FED FUNDS RATE %"),
     "DFF": ("DFF", "FED FUNDS RATE %"), "FED": ("DFF", "FED FUNDS RATE %"),
     "SOFR": ("SOFR", "SOFR %"),
