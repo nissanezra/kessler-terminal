@@ -50,9 +50,16 @@
   #titlebar .tb-left{display:flex;align-items:center;gap:12px;min-width:0;}
   #titlebar .navgroup{display:flex;align-items:center;gap:10px;justify-self:center;}
   #titlebar .name{color:var(--amber);font-weight:700;letter-spacing:.06em;white-space:nowrap;}
-  #cmd{flex:1;background:#141414;border:1px solid #2a2a2a;color:var(--white);
-    font-family:var(--mono);font-size:13px;padding:3px 8px;outline:none;}
-  #cmd::placeholder{color:#555;}
+  #cmdwrap{flex:1;display:flex;align-items:stretch;min-width:0;}
+  #cmd{flex:1;background:#1a1508;border:2px solid #6a5420;border-right:none;color:var(--white);
+    font-family:var(--mono);font-size:14px;font-weight:700;padding:5px 10px;outline:none;min-width:0;}
+  #cmd:focus{border-color:var(--amber);box-shadow:0 0 10px rgba(255,175,0,.35);}
+  #cmd::placeholder{color:#a08750;font-weight:400;}
+  #cmd-go{background:var(--amber);color:#000;border:2px solid var(--amber);
+    font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.08em;
+    padding:0 16px;cursor:pointer;}
+  #cmd-go:hover{background:#ffc63e;border-color:#ffc63e;}
+  #cmd-go:active{transform:translateY(1px);}
   #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;justify-self:end;}
   .navbtn{color:var(--amber);background:transparent;border:1px solid #4a3a15;
     padding:4px 14px;cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;
@@ -242,7 +249,9 @@
     #titlebar .name{font-size:12px;}
     #titlebar .navgroup{flex:1 1 100%;justify-content:center;justify-self:auto;}
     #titlebar .clock{font-size:11px;margin-left:auto;justify-self:auto;}
-    #cmd{order:5;flex:1 1 100%;padding:8px;font-size:14px;}
+    #cmdwrap{order:5;flex:1 1 100%;}
+    #cmd{padding:10px;font-size:15px;}
+    #cmd-go{padding:0 20px;font-size:14px;}
     #monitor{grid-template-columns:1fr!important;gap:0;padding:6px 8px;}
     .row{grid-template-columns:1fr auto auto auto;gap:10px;line-height:1.7;}
     .row .time{display:none;}
@@ -282,7 +291,10 @@
   <div id="titlebar">
     <div class="tb-left">
       <span class="name">KESSLER-KATZNELSON TERMINAL</span>
-      <input id="cmd" placeholder="Command  (e.g. AAPL · AAPL GP 6M · AAPL FA · AAPL N · NEWS · PORT · MON)" autocomplete="off" />
+      <div id="cmdwrap">
+        <input id="cmd" placeholder="Type ticker you want to search...  (e.g. AAPL)" autocomplete="off" />
+        <button id="cmd-go" onclick="goCmd()">GO</button>
+      </div>
     </div>
     <div class="navgroup">
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
@@ -1213,9 +1225,9 @@ function run(raw){
   return showSecurity(ticker);
 }
 const cmdEl=document.getElementById("cmd");
-if(window.NO_PORT)cmdEl.placeholder=cmdEl.placeholder.replace(" · PORT","");
+function goCmd(){ if(cmdEl.value.trim()){run(cmdEl.value);cmdEl.value="";} }
 cmdEl.addEventListener("keydown",e=>{
-  if(e.key==="Enter"){run(cmdEl.value);cmdEl.value="";}
+  if(e.key==="Enter")goCmd();
 });
 /* ESC from ANYWHERE (any view, any focused field) → close a modal if open,
    otherwise clear the command bar and jump home to the monitor. Capture phase so
