@@ -960,6 +960,10 @@ async function showChart(ticker,tf){
   const d=await loadChartInto("chart-full",ticker,state.full.tf,state.full.custom);
   if(state.full.ticker!==ticker)return;           // superseded by a newer pick
   setLoading(false);
+  if(!d||!(d.price&&d.price.length)){             // unknown ticker: no empty chart page
+    flashToast(`Ticker "${ticker}" not found`);
+    showMonitor(); return;
+  }
   if(d){document.getElementById("cf-title").textContent=d.display||ticker;
     const p=d.price||[];if(p.length>1){const last=p[p.length-1].value,chg=(last/p[0].value-1)*100;
       const lbl=state.full.custom?"CUSTOM":state.full.tf;
@@ -996,11 +1000,18 @@ async function showSecurity(ticker){
     `<div class="pe-wrap"><table class="pe-tab"><tr><td class="lab">${d.pe_label}</td>`+
     pe.map(x=>`<td class="yr">${x.year}</td>`).join("")+`</tr><tr><td></td>`+
     pe.map(x=>`<td class="val">${x.pe}x</td>`).join("")+`</tr></table></div>`:"";
-  // chart
+  // chart (awaited: a ticker with no quote, no fundamentals, no P/E AND no chart
+  // data doesn't exist — bounce back to the monitor instead of an empty page)
   tfButtons("sec-tfbar",state.security.tf,"setSecTf","security");
   updateRange("security");
   renderLegend("sec-legend");
-  loadChartInto("sec-chart",ticker,state.security.tf);
+  const cd=await loadChartInto("sec-chart",ticker,state.security.tf);
+  if(state.security.ticker!==ticker)return;
+  if(!d.last&&!(d.fields&&d.fields.length)&&!(d.pe&&d.pe.length)
+     &&!(cd&&cd.price&&cd.price.length)){
+    flashToast(`Ticker "${ticker}" not found`);
+    showMonitor(); return;
+  }
   // news
   loadNewsInto("sec-news",ticker);
 }
