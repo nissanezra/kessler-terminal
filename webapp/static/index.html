@@ -744,6 +744,10 @@ async function renderCompare(){
   if(gen!==cmpGen)return;                              // superseded by a newer render
   cmpDateAxis=(results.find(r=>r.dates&&r.dates.length)||{}).dates||[];
   const chart=getCmpChart();
+  // fresh formatter identity each render: the tick positions (0..239) never change
+  // between compares, so without this the library reuses CACHED labels drawn from
+  // the previous window's dates (e.g. a 1Y axis under a 2005-2010 compare)
+  chart.timeScale().applyOptions({tickMarkFormatter:t=>cmpAxisDate(t,true)});
   cmpSeries.forEach(o=>chart.removeSeries(o.series)); cmpSeries=[];
   const leg=document.getElementById("cmp-legend"); leg.innerHTML="";
   const overlay=cmpMode==="tf";              // per-window = auto-scaled SHAPE overlay
