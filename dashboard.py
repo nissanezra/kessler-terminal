@@ -117,7 +117,8 @@ SECTIONS = [
 
     # ----- CREDIT / MACRO (FRED, free key) + POSITIONING (CFTC, free) -----
     (2, "CREDIT SPREADS  (bps, daily)", "fred", [
-        ("HY OAS", "BAMLH0A0HYM2", 1), ("IG OAS", "BAMLC0A0CM", 1),
+        ("HY OAS", "BAMLH0A0HYM2", 1), ("BAA SPREAD", "BAA10Y", 1),
+        ("IG OAS", "BAMLC0A0CM", 1),
         ("CCC OAS", "BAMLH0A3HYC", 1), ("EM OAS", "BAMLEMCBPIOAS", 1),
     ]),
     (2, "INFLATION & CURVE  (%, daily)", "fred", [
@@ -484,7 +485,8 @@ async def fred_fetch_one(session, sid, key):
            if o.get("value") not in (".", "", None)]
     if not obs:
         return
-    mult = 100.0 if sid.startswith("BAML") else 1.0   # OAS percent -> bps
+    mult = (100.0 if sid.startswith("BAML") or sid in ("BAA10Y", "AAA10Y")
+            else 1.0)                                 # spread percent -> bps
     date, val = obs[0]
     prev = obs[1][1] if len(obs) > 1 else val
     price = val * mult
