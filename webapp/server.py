@@ -281,6 +281,11 @@ _RESEARCH_EXT = {".pdf", ".txt", ".md"}
 RESEARCH_FEEDS = [
     {"name": "Adam Taggart · Thoughtful Money",
      "url": "https://adamtaggart.substack.com/feed", "readable": True},
+    # YouTube Atom feed (their substack is dormant). Interviews only — Shorts are
+    # dropped. Items open as a blurb (video description) + link out to YouTube.
+    {"name": "Wealthion",
+     "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKMeK-HGHfUFFArZ91rzv5A",
+     "readable": False, "drop": "/shorts/"},
     # BMO is handled separately by _bmo_insights_section() below: the whole Insights
     # library (all authors, not just Macro Horizons) is pulled from BMO's sitemap and
     # filtered to the last N days. The pages are server-rendered, so they read in-app.
@@ -353,6 +358,82 @@ async def _bmo_insights_section(days=BMO_INSIGHTS_DAYS, limit=50):
     return {"name": f"BMO INSIGHTS · LAST {days} DAYS", "items": items}
 
 
+# ---- Mauldin Economics (Wix site, no RSS; per-publication sitemap chunks) ----
+# Free macro letters only: Thoughts from the Frontline (weekly) + Global Macro
+# Update. Pages are server-rendered, so they open in the in-app reader.
+MAULDIN_SITEMAP = "https://www.mauldineconomics.com/sitemap.xml"
+MAULDIN_PUBS = [                      # sitemap-chunk marker -> author tag
+    ("dynamic-frontlinethoughts", "Thoughts from the Frontline"),
+    ("dynamic-global-macro-update", "Global Macro Update"),
+]
+MAULDIN_LIMIT = 10
+
+
+async def _mauldin_section():
+    """Latest Mauldin Economics letters, merged across publications, newest first."""
+    rows = []
+    try:
+        async with aiohttp.ClientSession(max_line_size=65536, max_field_size=65536) as s:
+            async with s.get(MAULDIN_SITEMAP, headers=td.UA,
+                             timeout=aiohttp.ClientTimeout(total=15)) as r:
+                chunks = re.findall(r"<loc>([^<]+)</loc>", await r.text())
+            for frag, tag in MAULDIN_PUBS:
+                url = next((c for c in chunks if frag in c), None)
+                if not url:
+                    continue
+                try:
+                    async with s.get(url, headers=td.UA,
+                                     timeout=aiohttp.ClientTimeout(total=15)) as r:
+                        raw = await r.text()
+                except Exception:
+                    continue
+                rows += [(lastmod, loc, tag) for loc, lastmod in re.findall(
+                    r"<loc>([^<]+)</loc>\s*<lastmod>([^<]+)</lastmod>", raw)]
+    except Exception:
+        return None
+    rows.sort(reverse=True)                        # ISO dates — string sort is fine
+    now = datetime.now(timezone.utc)
+    items = []
+    for lastmod, loc, tag in rows[:MAULDIN_LIMIT]:
+        try:
+            dt = datetime.fromisoformat(lastmod.replace("Z", "+00:00"))
+            if not dt.tzinfo:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = (now - dt).days
+            meta = dt.strftime("%b %d") + (" · today" if age <= 0 else f" · {age}d")
+        except ValueError:
+            meta = lastmod
+        slug = loc.rstrip("/").rsplit("/", 1)[-1]
+        items.append({"kind": "web", "title": _slug_to_title(slug), "link": loc,
+                      "meta": meta, "author": tag})
+    if not items:
+        return None
+    return {"name": "Mauldin Economics", "items": items}
+
+
+# ---- Jeremy Grantham: news / interviews / articles (Google News query) ----
+# He publishes rarely (GMO viewpoints have no feed), so this tracks press
+# coverage instead: anything mentioning him in the last year, newest first.
+# Google News links resolve to the real publisher inside the article reader.
+async def _grantham_section(session):
+    params = {"q": '"Jeremy Grantham" when:1y', "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    try:
+        async with session.get(td.GOOGLE_NEWS, params=params, headers=td.UA,
+                               timeout=aiohttp.ClientTimeout(total=12)) as r:
+            items = td._parse_rss(await r.text(), 40)
+    except Exception:
+        return None
+    items.sort(key=lambda it: td._rss_dt(it.get("pub", ""))
+               or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    items = td._label_sources(items[:10])
+    out = [{"kind": "web", "title": it["title"], "link": it["link"],
+            "meta": td._rss_age(it.get("pub", "")), "author": it.get("source", "")}
+           for it in items if it.get("link")]
+    if not out:
+        return None
+    return {"name": "Jeremy Grantham", "items": out}
+
+
 def _clean_html(s):
     return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", s or "")).split())
 
@@ -376,6 +457,19 @@ def _parse_research_feed(text, limit=12):
                     "desc": it.findtext("description") or ""})
         if len(out) >= limit:
             break
+    if not out:                       # Atom feed (e.g. YouTube channels), not RSS
+        A, M = "{http://www.w3.org/2005/Atom}", "{http://search.yahoo.com/mrss/}"
+        for e in root.iter(A + "entry"):
+            title = (e.findtext(A + "title") or "").strip()
+            if not title:
+                continue
+            ln, grp = e.find(A + "link"), e.find(M + "group")
+            out.append({"title": title,
+                        "link": (ln.get("href") if ln is not None else "").strip(),
+                        "pub": (e.findtext(A + "published") or "").strip(),
+                        "desc": (grp.findtext(M + "description") if grp is not None else "") or ""})
+            if len(out) >= limit:
+                break
     return out
 
 
@@ -387,7 +481,9 @@ async def _research_feed(session, feed):
     except Exception:
         return None
     items = []
-    for it in _parse_research_feed(raw, 12):
+    for it in _parse_research_feed(raw, 30):
+        if feed.get("drop") and feed["drop"] in (it.get("link") or ""):
+            continue                       # e.g. YouTube Shorts — interviews only
         entry = {"title": it["title"], "meta": td._rss_age(it["pub"])}
         if feed.get("author"):
             entry["author"] = feed["author"]
@@ -397,7 +493,11 @@ async def _research_feed(session, feed):
             entry["kind"], entry["body"] = "blurb", _clean_html(it["desc"])
             if feed.get("link_base"):
                 entry["link"] = feed["link_base"] + _slug(it["title"]) + feed.get("link_suffix", "")
+            elif it.get("link"):
+                entry["link"] = it["link"]
         items.append(entry)
+        if len(items) >= 12:
+            break
     return {"name": feed["name"], "items": items}
 
 
@@ -844,6 +944,8 @@ async def api_research(request):
         econ_tasks = [_econ_group_section(econ, g) for g in ECON_GROUPS]
         tasks = []
         tasks += [_research_feed(session, f) for f in RESEARCH_FEEDS]
+        tasks.append(_mauldin_section())             # Mauldin letters (sitemap, no RSS)
+        tasks.append(_grantham_section(session))     # Grantham press/interviews
         tasks.append(_econ_releases_section(econ))   # CPI/jobs/JOLTS/ADP/... via FRED
         tasks += econ_tasks[:2]                      # FEDERAL RESERVE, U.S. DATA & BUDGET
         tasks.append(_treasury_auctions_section(econ))

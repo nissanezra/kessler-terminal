@@ -908,14 +908,18 @@ NEWS_SECTIONS = [
 
 
 def _rss_dt(pub):
-    """Parse an RSS pubDate into a tz-aware UTC datetime, or None."""
+    """Parse an RSS pubDate (or Atom ISO date) into a tz-aware UTC datetime, or None."""
     for fmt in ("%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z"):
         try:
             dt = datetime.strptime(pub, fmt)
             return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
         except ValueError:
             continue
-    return None
+    try:
+        dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))   # Atom feeds (YouTube etc.)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _rss_age(pub):
