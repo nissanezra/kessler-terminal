@@ -411,12 +411,18 @@ async def _mauldin_section():
     return {"name": "Mauldin Economics", "items": items}
 
 
-# ---- Jeremy Grantham: news / interviews / articles (Google News query) ----
-# He publishes rarely (GMO viewpoints have no feed), so this tracks press
-# coverage instead: anything mentioning him in the last year, newest first.
-# Google News links resolve to the real publisher inside the article reader.
-async def _grantham_section(session):
-    params = {"q": '"Jeremy Grantham" when:1y', "hl": "en-US", "gl": "US", "ceid": "US:en"}
+# ---- Tracked people: news / interviews / articles (Google News queries) ----
+# These voices publish rarely or behind sites with no feed, so each section
+# tracks press coverage instead: anything mentioning them in the last year,
+# newest first. Google News links resolve to the real publisher in the reader.
+PERSON_FEEDS = [
+    ("Jeremy Grantham", '"Jeremy Grantham"'),
+    ("Lacy Hunt", '"Lacy Hunt"'),
+]
+
+
+async def _person_section(session, name, query):
+    params = {"q": f"{query} when:1y", "hl": "en-US", "gl": "US", "ceid": "US:en"}
     try:
         async with session.get(td.GOOGLE_NEWS, params=params, headers=td.UA,
                                timeout=aiohttp.ClientTimeout(total=12)) as r:
@@ -431,7 +437,7 @@ async def _grantham_section(session):
            for it in items if it.get("link")]
     if not out:
         return None
-    return {"name": "Jeremy Grantham", "items": out}
+    return {"name": name, "items": out}
 
 
 def _clean_html(s):
@@ -945,7 +951,7 @@ async def api_research(request):
         tasks = []
         tasks += [_research_feed(session, f) for f in RESEARCH_FEEDS]
         tasks.append(_mauldin_section())             # Mauldin letters (sitemap, no RSS)
-        tasks.append(_grantham_section(session))     # Grantham press/interviews
+        tasks += [_person_section(session, n, q) for n, q in PERSON_FEEDS]
         tasks.append(_econ_releases_section(econ))   # CPI/jobs/JOLTS/ADP/... via FRED
         tasks += econ_tasks[:2]                      # FEDERAL RESERVE, U.S. DATA & BUDGET
         tasks.append(_treasury_auctions_section(econ))
