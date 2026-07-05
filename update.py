@@ -170,6 +170,7 @@ def main():
         print(f"  update: fetching {len(missing)} missing file(s)…")
     else:
         print(f"  update: up to date (v{local})")
+        _run_rosenberg()           # still fetch reports even when the code is current
         return
 
     ok = True
