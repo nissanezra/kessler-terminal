@@ -1,11 +1,12 @@
 {
-  "version": 42,
+  "version": 43,
   "files": [
     "terminal.py",
     "dashboard.py",
     "terminal_data.py",
     "chart_render.py",
     "update.py",
+    "rosenberg.py",
     "appname.txt",
     "webapp/server.py",
     "webapp/app.py",

@@ -190,6 +190,20 @@ def main():
         with open(VFILE, "w") as f:
             f.write(str(remote))
     print("  update: done." if ok else "  update: some failed — will retry next launch.")
+    _run_rosenberg()               # after the download, so it uses the freshest code
+
+
+def _run_rosenberg():
+    """Rosenberg Research auto-download: prompt for login once, then keep reports
+    fresh in research/. Windows-only, best-effort, never blocks the app on error."""
+    if os.name != "nt":
+        return
+    try:
+        sys.path.insert(0, HERE)
+        import rosenberg
+        rosenberg.auto()
+    except Exception as e:
+        print(f"  rosenberg: skipped — {e}")
 
 
 if __name__ == "__main__":
