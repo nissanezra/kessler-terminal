@@ -281,6 +281,8 @@ _RESEARCH_EXT = {".pdf", ".txt", ".md"}
 RESEARCH_FEEDS = [
     {"name": "Adam Taggart · Thoughtful Money",
      "url": "https://adamtaggart.substack.com/feed", "readable": True},
+    {"name": "Henry Tapper · AgeWage",
+     "url": "https://henrytapper.com/feed/", "readable": True},
     # YouTube Atom feed (their substack is dormant). Interviews only — Shorts are
     # dropped. Items open as a blurb (video description) + link out to YouTube.
     {"name": "Wealthion",
