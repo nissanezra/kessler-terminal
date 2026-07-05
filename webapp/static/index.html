@@ -239,6 +239,13 @@
     #chart-full{height:80vh!important;}
     .ctitle,.crange{color:#111!important;}
     .legend{color:#555!important;--price:#111;}
+    /* article reader (news + research): black-on-white for paper */
+    #readerview{max-width:100%!important;}
+    #rd-title{color:#111!important;}
+    #rd-meta{color:#555!important;}
+    #rd-body p,#rd-body .rd-pre{color:#111!important;}
+    #rd-body .dim,#rd-body .rd-embednote{color:#777!important;}
+    #rd-body .rd-embedwrap{display:none!important;}   /* iframes don't print */
   }
   /* ---- mobile / iPhone home-screen web app ---- */
   @media(max-width:820px){
@@ -394,6 +401,7 @@
 
   <div id="readerview" class="view">
     <div class="chart-top"><button class="btn" onclick="readerBack()">← Back</button>
+      <button class="btn" onclick="window.print()">🖨 Print</button>
       <a class="btn" id="rd-ext" target="_blank" rel="noopener" href="#">Open original ↗</a></div>
     <div id="rd-title"></div>
     <div id="rd-meta"></div>
