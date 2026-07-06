@@ -1522,14 +1522,15 @@ async def _rosenberg_cloud_loop():
     Breakfast/Early Morning notes into research/ on startup and every 6h, so the
     hosted app (desktop + phone) shows them. No-op when the secrets aren't set."""
     if not (os.environ.get("ROSENBERG_EMAIL") and os.environ.get("ROSENBERG_PASSWORD")):
+        print("  rosenberg cloud: no creds set — skipping", flush=True)
         return
-    import rosenberg                              # sibling module (pure stdlib)
+    import rosenberg, traceback                   # sibling module (pure stdlib)
     while True:
         try:
             n = await asyncio.to_thread(rosenberg.sync_cloud)
-            print(f"  rosenberg cloud: {n} new report(s)")
-        except Exception as e:
-            print(f"  rosenberg cloud: error — {e}")
+            print(f"  rosenberg cloud: sync done — {n} new report(s)", flush=True)
+        except Exception:
+            print("  rosenberg cloud ERROR:\n" + traceback.format_exc(), flush=True)
         await asyncio.sleep(6 * 3600)
 
 

@@ -201,34 +201,8 @@ def _api(path, token, method="GET", body=None, raw=False):
     return (blob, ctype) if raw else json.loads(blob)
 
 
-# The two daily flagship notes. A report's publication series appears somewhere in
-# its metadata (not its headline title), so we match against a text blob of the item.
-DAILY_SERIES = ("breakfast with dave", "early morning with dave")
-
-
-def _item_blob(obj):
-    """Short-string text of a publication item (for series matching) — skips long
-    body/HTML fields so it stays small and only carries labels/names."""
-    parts = []
-
-    def rec(x, depth):
-        if depth > 3:
-            return
-        if isinstance(x, str):
-            if len(x) <= 120:
-                parts.append(x)
-        elif isinstance(x, dict):
-            for v in x.values():
-                rec(v, depth + 1)
-        elif isinstance(x, list):
-            for v in x[:25]:
-                rec(v, depth + 1)
-    rec(obj, 0)
-    return " ".join(parts).lower()
-
-
 def _walk_publications(obj, out):
-    """Collect report items (id + title + date + text blob) from an unknown-shaped response."""
+    """Collect report items (id + title + date + bucketId) from an unknown-shaped response."""
     if isinstance(obj, dict):
         pid = obj.get("id")
         title = obj.get("title") or obj.get("name")
@@ -236,7 +210,7 @@ def _walk_publications(obj, out):
                 or obj.get("publishedAt") or obj.get("createdAt"))
         if isinstance(pid, str) and title and date:
             out.append({"id": pid, "title": title, "date": str(date)[:10],
-                        "blob": _item_blob(obj)})
+                        "bucketId": obj.get("bucketId")})
         for v in obj.values():
             _walk_publications(v, out)
     elif isinstance(obj, list):
@@ -245,10 +219,40 @@ def _walk_publications(obj, out):
     return out
 
 
-def list_recent(token, limit=40):
+def list_buckets(token):
+    """[(name_lowercase, id)] for the account's publication buckets (series)."""
+    try:
+        data = _api("/api/v3/buckets", token)
+    except Exception:
+        return []
+    out = []
+
+    def rec(o):
+        if isinstance(o, dict):
+            bid, name = o.get("id"), (o.get("name") or o.get("title"))
+            if isinstance(bid, str) and isinstance(name, str):
+                out.append((name.lower(), bid))
+            for v in o.values():
+                rec(v)
+        elif isinstance(o, list):
+            for v in o:
+                rec(v)
+    rec(data)
+    return out
+
+
+def daily_bucket_ids(token):
+    """The bucketId(s) of the 'Daily Reports' group (Breakfast + Early Morning with Dave)."""
+    return [bid for name, bid in list_buckets(token) if "daily" in name]
+
+
+def list_recent(token, limit=40, bucket_id=None):
+    filt = {"search": "", "hideLockedContent": False}
+    if bucket_id:
+        filt["bucketId"] = bucket_id                 # restrict to one publication group
     body = {"semanticRatio": 0,
             "pagination": {"page": 1, "limit": limit},
-            "filter": {"search": "", "hideLockedContent": False}}
+            "filter": filt}
     data = _api("/api/v3/publications/search_fast", token, "POST", body)
     items, seen = [], set()
     for it in _walk_publications(data, []):
@@ -340,14 +344,20 @@ def sync(token=None, quiet=False, limit=40, daily_only=True, keep=10):
         token, _ = login(*creds)
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     existing = set(os.listdir(RESEARCH_DIR))
-    pubs = list_recent(token, limit)                 # already newest-first
-    if daily_only:
-        picked = [p for p in pubs if any(s in p.get("blob", "") for s in DAILY_SERIES)]
-        if picked:
-            say(f"  rosenberg: {len(picked)} daily notes (Breakfast/Early Morning) found")
-            pubs = picked
-        else:                                        # series label not detected — don't end up empty
-            say("  rosenberg: daily filter matched none; using latest reports instead")
+    daily_ids = daily_bucket_ids(token) if daily_only else []
+    if daily_ids:                                    # query the Daily Reports group directly
+        pubs, seen = [], set()
+        for bid in daily_ids:
+            for p in list_recent(token, limit, bucket_id=bid):
+                if p["id"] not in seen:
+                    seen.add(p["id"])
+                    pubs.append(p)
+        pubs.sort(key=lambda x: x["date"], reverse=True)
+        say(f"  rosenberg: {len(pubs)} daily notes (Breakfast/Early Morning)")
+    else:
+        pubs = list_recent(token, limit)             # newest-first, all groups (fallback)
+        if daily_only:
+            say("  rosenberg: daily bucket not found; using latest reports instead")
     pubs = pubs[:keep]
     say(f"  rosenberg: {len(pubs)} report(s) to check")
     got = 0
