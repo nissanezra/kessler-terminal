@@ -218,7 +218,7 @@ def _walk_publications(obj, out):
     return out
 
 
-def list_recent(token, limit=25):
+def list_recent(token, limit=40):
     body = {"semanticRatio": 0,
             "pagination": {"page": 1, "limit": limit},
             "filter": {"search": "", "hideLockedContent": False}}
@@ -228,6 +228,9 @@ def list_recent(token, limit=25):
         if it["id"] not in seen:
             seen.add(it["id"])
             items.append(it)
+    # newest first, regardless of the API's default ordering, so a report published
+    # today is always at the top and never falls outside the downloaded set.
+    items.sort(key=lambda x: x["date"], reverse=True)
     return items
 
 
