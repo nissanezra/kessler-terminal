@@ -334,8 +334,7 @@
       <button class="btn add-btn" onclick="openAddModal(state.security.ticker)">Add to Dashboard</button>
       <button class="btn" onclick="showChart(state.security.ticker,state.security.tf)">GP</button>
       <button class="btn" data-mbtn="sec-chart" onclick="toggleMeasure('sec-chart')">Measure</button>
-      <button class="btn" onclick="openCompareTickers(state.security.ticker,state.security.tf)">Compare</button>
-      <button class="btn" onclick="openCompareTf(state.security.ticker,state.security.tf)">Compare TF</button>
+      <button class="btn" onclick="openCompareTf(state.security.ticker,state.security.tf)">Overlay</button>
       <button class="btn" onclick="showFinancials(state.security.ticker)">Financials</button>
     </div>
     <div id="sec-fund"></div>
@@ -357,8 +356,7 @@
       <span class="crange" id="cf-range"></span>
       <button class="btn add-btn" onclick="openAddModal(state.full.ticker)">Add to Dashboard</button>
       <button class="btn" data-mbtn="chart-full" onclick="toggleMeasure('chart-full')">Measure</button>
-      <button class="btn" onclick="openCompareTickers(state.full.ticker,state.full.tf)">Compare</button>
-      <button class="btn" onclick="openCompareTf(state.full.ticker,state.full.tf)">Compare TF</button>
+      <button class="btn" onclick="openCompareTf(state.full.ticker,state.full.tf)">Overlay</button>
       <button class="btn print-btn" onclick="doPrint()">Print</button>
     </div>
     <div class="daterow" id="cf-daterow"><input type="date" id="cf-from"><span class="dsep">→</span>
@@ -370,7 +368,7 @@
   <div id="compareview" class="view">
     <div class="chart-top">
       <button class="btn" onclick="showMonitor()">← Monitor</button>
-      <span class="ctitle" id="cmp-title">COMPARE</span>
+      <span class="ctitle" id="cmp-title">OVERLAY</span>
       <input id="cmp-add-ticker" class="cmp-input" placeholder="add ticker" autocomplete="off" />
       <select id="cmp-add-tf" class="cmp-input" onchange="cmpTfSelChange()"></select>
       <input type="date" id="cmp-add-from" class="cmp-input" style="display:none" />
@@ -829,7 +827,7 @@ async function renderCompare(){
   chart.priceScale("right").applyOptions({visible:!overlay||axisVals.includes("right")});
   chart.timeScale().fitContent();
   document.getElementById("cmp-title").textContent=
-    overlay?"COMPARE · overlay (actual values · L/R axes)":`COMPARE · ${cmpTf} · % change`;
+    overlay?"OVERLAY · actual values · L/R axes":`OVERLAY · ${cmpTf} · % change`;
 }
 function renderCompareControls(){
   const tfbar=document.getElementById("cmp-tfbar"), sel=document.getElementById("cmp-add-tf"),
