@@ -1037,19 +1037,30 @@ ROSENBERG_SECTIONS = [
 ]
 
 
+def _clean_report_title(t):
+    """Tidy a report headline for display: no filename underscores, no ' -- '."""
+    t = t.replace("_", " ")
+    t = re.sub(r"\s*--\s*", " · ", t)             # 'Breakfast with Dave -- July 6' -> ' · '
+    return re.sub(r"\s+", " ", t).strip()
+
+
 async def api_research(request):
     """Research view: saved files (drop into research/) + public feeds."""
     RESEARCH_DIR.mkdir(exist_ok=True)
+    try:                                          # real headlines the downloader saved
+        titles = json.loads((RESEARCH_DIR / ".rr_titles.json").read_text(encoding="utf-8"))
+    except Exception:
+        titles = {}
     groups, other = {}, []                        # groups: code -> [items]
     for p in RESEARCH_DIR.iterdir():
         if not (p.is_file() and p.suffix.lower() in _RESEARCH_EXT
                 and not p.name.startswith(".")):
             continue
         m = re.match(r"rr_([a-z]+)__(.+)", p.stem)
-        title = m.group(2) if m else p.stem
-        dm = re.search(r"(\d{4}-\d{2}-\d{2})$", title)   # report date lives at the end
+        stem_title = re.sub(r"_?\d{4}-\d{2}-\d{2}$", "", m.group(2) if m else p.stem)
+        dm = re.search(r"(\d{4}-\d{2}-\d{2})$", (m.group(2) if m else p.stem))
         item = {"kind": "file", "file": p.name,
-                "title": re.sub(r"_?\d{4}-\d{2}-\d{2}$", "", title),  # drop the date suffix
+                "title": _clean_report_title(titles.get(p.name) or stem_title),
                 "ext": p.suffix.lower().lstrip("."),
                 "_m": p.stat().st_mtime, "_d": dm.group(1) if dm else ""}
         (groups.setdefault(m.group(1), []) if m else other).append(item)

@@ -336,6 +336,26 @@ def _safe_name(title, date):
     return f"{base}_{date}.pdf"
 
 
+# Sidecar mapping saved filename -> the report's real headline (with punctuation the
+# filename can't hold), so the terminal can show clean titles instead of the filename.
+TITLES_FILE = os.path.join(RESEARCH_DIR, ".rr_titles.json")
+
+
+def _load_titles():
+    try:
+        return json.load(open(TITLES_FILE, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_titles(titles):
+    try:
+        with open(TITLES_FILE, "w", encoding="utf-8") as f:
+            json.dump(titles, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def sync(token=None, quiet=False):
     """Download the newest reports from every Rosenberg section not already saved.
     Filenames are prefixed `rr_<code>__` so the terminal groups them by section.
@@ -352,6 +372,7 @@ def sync(token=None, quiet=False):
         token, _ = login(*creds)
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     existing = set(os.listdir(RESEARCH_DIR))
+    titles = _load_titles()                          # filename -> original clean title
     got = 0
     for feed in ROSENBERG_FEEDS:
         try:
@@ -362,6 +383,7 @@ def sync(token=None, quiet=False):
         say(f"  rosenberg: {feed['name']}: {len(pubs)} newest")
         for p in pubs:
             name = f"rr_{feed['code']}__" + _safe_name(p["title"], p["date"])
+            titles[name] = p["title"]                # keep the real headline for display
             if name in existing:
                 continue
             try:
@@ -371,6 +393,7 @@ def sync(token=None, quiet=False):
                 say(f"    + {name}")
             except Exception as e:
                 say(f"    x {p['title'][:44]} — {e}")
+    _save_titles(titles)
     say(f"  rosenberg: {got} new report(s) downloaded" if got
         else "  rosenberg: up to date")
     return got
