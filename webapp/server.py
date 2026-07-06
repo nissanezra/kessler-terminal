@@ -252,6 +252,108 @@ async def api_security(request):
     })
 
 
+# ---- symbol search: company name -> ticker suggestions -------------------
+# SEC's company_tickers.json covers ~10k US-listed stocks (name -> ticker). We
+# add the ETFs / indices / crypto the terminal supports but SEC doesn't list.
+SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+_SYM_CACHE = {"t": None, "rows": []}      # [(symbol, name, type)]; refreshed daily
+SYMBOL_SUPPLEMENT = [
+    # major ETFs
+    ("SPY", "SPDR S&P 500 ETF", "etf"), ("QQQ", "Invesco QQQ (Nasdaq 100)", "etf"),
+    ("DIA", "SPDR Dow Jones ETF", "etf"), ("IWM", "iShares Russell 2000 ETF", "etf"),
+    ("VTI", "Vanguard Total Stock Market ETF", "etf"), ("VOO", "Vanguard S&P 500 ETF", "etf"),
+    ("GLD", "SPDR Gold Shares", "etf"), ("SLV", "iShares Silver Trust", "etf"),
+    ("TLT", "iShares 20+ Year Treasury ETF", "etf"), ("HYG", "iShares High Yield Bond ETF", "etf"),
+    ("XLF", "Financials Sector ETF", "etf"), ("XLE", "Energy Sector ETF", "etf"),
+    ("XLK", "Technology Sector ETF", "etf"), ("USO", "US Oil Fund", "etf"),
+    ("GDX", "VanEck Gold Miners ETF", "etf"), ("ARKK", "ARK Innovation ETF", "etf"),
+    # indices (as the terminal keys them)
+    ("SPX", "S&P 500 Index", "index"), ("NDX", "Nasdaq 100 Index", "index"),
+    ("DJI", "Dow Jones Industrial Average", "index"), ("INDU", "Dow Jones Industrial Average", "index"),
+    ("RUT", "Russell 2000 Index", "index"), ("VIX", "CBOE Volatility Index", "index"),
+    # crypto
+    ("BTC", "Bitcoin", "crypto"), ("ETH", "Ethereum", "crypto"), ("SOL", "Solana", "crypto"),
+    ("XRP", "XRP", "crypto"), ("DOGE", "Dogecoin", "crypto"), ("ADA", "Cardano", "crypto"),
+    # rates (FRED-charted)
+    ("FDTR", "Fed Funds Rate", "rate"), ("US10Y", "US 10-Year Yield", "rate"),
+    ("US2Y", "US 2-Year Yield", "rate"), ("CPI", "US CPI Inflation", "rate"),
+]
+
+
+async def _symbol_rows(session):
+    now = datetime.now()
+    if _SYM_CACHE["t"] and (now - _SYM_CACHE["t"]).total_seconds() < 86400:
+        return _SYM_CACHE["rows"]
+    rows = list(SYMBOL_SUPPLEMENT)
+    try:
+        async with session.get(SEC_TICKERS_URL, headers=td.SEC_UA,
+                               timeout=aiohttp.ClientTimeout(total=15)) as r:
+            data = await r.json(content_type=None)
+        for v in data.values():
+            sym, title = v.get("ticker"), v.get("title")
+            if sym and title:
+                rows.append((sym.upper(), title.title(), "stock"))
+    except Exception:
+        if _SYM_CACHE["rows"]:
+            return _SYM_CACHE["rows"]          # keep the last good list on a blip
+    _SYM_CACHE.update(t=now, rows=rows)
+    return rows
+
+
+_NAME_SUFFIX = {"inc", "incorporated", "corp", "corporation", "co", "company", "ltd",
+                "limited", "plc", "sa", "ag", "nv", "group", "holdings", "holding",
+                "the", "lp", "llc", "trust", "class", "common", "stock", "&"}
+
+
+def _name_core(name):
+    """Company name minus corporate suffixes: 'Apple Inc.' -> 'apple'."""
+    return " ".join(w for w in re.split(r"[^\w]+", name.lower())
+                    if w and w not in _NAME_SUFFIX)
+
+
+def _rank_symbol(q, sym, name):
+    """Higher is better; None to drop. q is lowercase."""
+    s, n = sym.lower(), name.lower()
+    if s == q:
+        return 100                             # exact ticker
+    if _name_core(name) == q:
+        return 88                              # exact company name (ignoring Inc/Corp/…)
+    if s.startswith(q):
+        return 80 - len(sym)                   # prefer the shortest matching ticker
+    if n.startswith(q):
+        return 70
+    if any(w.startswith(q) for w in re.split(r"[^\w]+", n)):
+        return 60
+    if q in n:
+        return 45
+    return None
+
+
+async def api_symsearch(request):
+    """Company name (or partial ticker) -> best-matching ticker suggestions."""
+    q = request.query.get("q", "").strip().lower()
+    if len(q) < 2:
+        return web.json_response({"results": []})
+    rows = await _symbol_rows(request.app["session"])
+    scored = []
+    for sym, name, typ in rows:
+        sc = _rank_symbol(q, sym, name)
+        if sc is not None:
+            # tie-break: shorter company name (the real one beats obscure lookalikes),
+            # then shorter ticker, then alphabetical.
+            scored.append((sc, len(name), len(sym), sym, name, typ))
+    scored.sort(key=lambda x: (-x[0], x[1], x[2], x[3]))
+    seen, out = set(), []
+    for _, _, _, sym, name, typ in scored:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        out.append({"symbol": sym, "name": name, "type": typ})
+        if len(out) >= 8:
+            break
+    return web.json_response({"results": out})
+
+
 async def api_news(request):
     """Headlines for a ticker (or general market news if no ticker)."""
     ticker = request.query.get("ticker") or None
@@ -1441,6 +1543,7 @@ def make_app():
     app.router.add_post("/api/add", api_add)
     app.router.add_get("/api/chart", api_chart)
     app.router.add_get("/api/security", api_security)
+    app.router.add_get("/api/symsearch", api_symsearch)
     app.router.add_get("/api/financials", api_financials)
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)

@@ -50,7 +50,19 @@
   #titlebar .tb-left{display:flex;align-items:center;gap:12px;min-width:0;}
   #titlebar .navgroup{display:flex;align-items:center;gap:10px;justify-self:center;}
   #titlebar .name{color:var(--amber);font-weight:700;letter-spacing:.06em;white-space:nowrap;}
-  #cmdwrap{flex:1;display:flex;align-items:stretch;min-width:0;}
+  #cmdwrap{flex:1;display:flex;align-items:stretch;min-width:0;position:relative;}
+  #cmd-sug{position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:40;
+    background:#141007;border:2px solid #6a5420;border-radius:0 0 4px 4px;
+    max-height:340px;overflow-y:auto;display:none;box-shadow:0 8px 24px rgba(0,0,0,.55);}
+  #cmd-sug.show{display:block;}
+  .sug{display:flex;align-items:baseline;gap:10px;padding:7px 11px;cursor:pointer;
+    border-bottom:1px solid #241b0a;}
+  .sug:last-child{border-bottom:none;}
+  .sug.active,.sug:hover{background:#2a2009;}
+  .sug .sy{color:var(--amber);font-family:var(--mono);font-weight:700;font-size:13px;
+    min-width:58px;}
+  .sug .nm{color:#cfc3a6;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .sug .ty{margin-left:auto;color:#7a6a3e;font-size:10px;letter-spacing:.06em;text-transform:uppercase;}
   #cmd{flex:1;background:#1a1508;border:2px solid #6a5420;border-right:none;color:var(--white);
     font-family:var(--mono);font-size:14px;font-weight:700;padding:5px 10px;outline:none;min-width:0;}
   #cmd:focus{border-color:var(--amber);box-shadow:0 0 10px rgba(255,175,0,.35);}
@@ -301,6 +313,7 @@
       <div id="cmdwrap">
         <input id="cmd" placeholder="Type ticker you want to search...  (e.g. AAPL)" autocomplete="off" />
         <button id="cmd-go" onclick="goCmd()">GO</button>
+        <div id="cmd-sug"></div>
       </div>
     </div>
     <div class="navgroup">
@@ -1248,10 +1261,46 @@ function run(raw){
   return showSecurity(ticker);
 }
 const cmdEl=document.getElementById("cmd");
-function goCmd(){ if(cmdEl.value.trim()){run(cmdEl.value);cmdEl.value="";} }
-cmdEl.addEventListener("keydown",e=>{
-  if(e.key==="Enter")goCmd();
+function goCmd(){ if(cmdEl.value.trim()){hideSug();run(cmdEl.value);cmdEl.value="";} }
+
+/* ---- ticker autocomplete: company name -> ticker suggestions ---- */
+const sugEl=document.getElementById("cmd-sug");
+let sugItems=[], sugActive=-1, sugTimer=null, sugSeq=0;
+function hideSug(){ sugEl.classList.remove("show"); sugEl.innerHTML=""; sugItems=[]; sugActive=-1; }
+function pickSug(i){ const it=sugItems[i]; if(!it)return; cmdEl.value=""; hideSug(); showSecurity(it.symbol); }
+function renderSug(){
+  sugEl.innerHTML=sugItems.map((it,i)=>
+    `<div class="sug${i===sugActive?' active':''}" data-i="${i}">`
+    +`<span class="sy">${esc(it.symbol)}</span><span class="nm">${esc(it.name)}</span>`
+    +`<span class="ty">${esc(it.type||"")}</span></div>`).join("");
+  sugEl.classList.toggle("show",sugItems.length>0);
+}
+sugEl.addEventListener("mousedown",e=>{ const d=e.target.closest(".sug"); if(d){e.preventDefault();pickSug(+d.dataset.i);} });
+async function querySug(q){
+  const seq=++sugSeq;
+  try{
+    const r=await(await fetch(`/api/symsearch?q=${encodeURIComponent(q)}`)).json();
+    if(seq!==sugSeq)return;                 // a newer keystroke superseded this
+    sugItems=r.results||[]; sugActive=-1; renderSug();
+  }catch(e){ /* leave any existing list */ }
+}
+cmdEl.addEventListener("input",()=>{
+  const q=cmdEl.value.trim();
+  clearTimeout(sugTimer);
+  if(q.length<2){ hideSug(); return; }      // command-like input just returns no matches
+  sugTimer=setTimeout(()=>querySug(q),160);
 });
+cmdEl.addEventListener("keydown",e=>{
+  const open=sugEl.classList.contains("show");
+  if(open&&e.key==="ArrowDown"){e.preventDefault();sugActive=(sugActive+1)%sugItems.length;renderSug();return;}
+  if(open&&e.key==="ArrowUp"){e.preventDefault();sugActive=(sugActive-1+sugItems.length)%sugItems.length;renderSug();return;}
+  if(e.key==="Enter"){
+    if(open&&sugActive>=0){e.preventDefault();pickSug(sugActive);return;}
+    if(open&&sugItems.length&&!/\s/.test(cmdEl.value.trim())){e.preventDefault();pickSug(0);return;}
+    goCmd();
+  }
+});
+cmdEl.addEventListener("blur",()=>setTimeout(hideSug,120));
 /* ESC from ANYWHERE (any view, any focused field) → close a modal if open,
    otherwise clear the command bar and jump home to the monitor. Capture phase so
    nothing swallows it; works in the native desktop window too. */
