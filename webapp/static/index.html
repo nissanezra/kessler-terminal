@@ -334,7 +334,7 @@
       <button class="btn add-btn" onclick="openAddModal(state.security.ticker)">Add to Dashboard</button>
       <button class="btn" onclick="showChart(state.security.ticker,state.security.tf)">GP</button>
       <button class="btn" data-mbtn="sec-chart" onclick="toggleMeasure('sec-chart')">Measure</button>
-      <button class="btn" onclick="openCompareTf(state.security.ticker,state.security.tf)">Overlay</button>
+      <button class="btn" onclick="overlayFromChart('security')">Overlay</button>
       <button class="btn" onclick="showFinancials(state.security.ticker)">Financials</button>
     </div>
     <div id="sec-fund"></div>
@@ -356,7 +356,7 @@
       <span class="crange" id="cf-range"></span>
       <button class="btn add-btn" onclick="openAddModal(state.full.ticker)">Add to Dashboard</button>
       <button class="btn" data-mbtn="chart-full" onclick="toggleMeasure('chart-full')">Measure</button>
-      <button class="btn" onclick="openCompareTf(state.full.ticker,state.full.tf)">Overlay</button>
+      <button class="btn" onclick="overlayFromChart('full')">Overlay</button>
       <button class="btn print-btn" onclick="doPrint()">Print</button>
     </div>
     <div class="daterow" id="cf-daterow"><input type="date" id="cf-from"><span class="dsep">→</span>
@@ -691,6 +691,7 @@ let cmpMode="ticker", cmpTf="1Y", cmpList=[], cmpChart=null, cmpSeries=[], cmpId
 function shortD(s){const[y,m]=s.split("-");return `${MON[+m-1]}'${y.slice(2)}`;}
 /* x-axis: real dates (from the FIRST series' window), not "% of window" */
 let cmpDateAxis=[];
+let cmpDefaultCustom=null;      // when Overlay is opened from a custom-range chart, the add-ticker date default
 function cmpAxisDate(t,short){
   const d=cmpDateAxis[Math.round(t)];
   if(d==null)return Math.round(t/(CMP_N-1)*100)+"%";        // fallback: % of window
@@ -837,7 +838,11 @@ function renderCompareControls(){
     tfbar.innerHTML=TFS.map(tf=>`<button class="tf ${tf===cmpTf?'active':''}" onclick="setCmpTf('${tf}')">${tf}</button>`).join("");
   }else{
     tfbar.style.display="none"; sel.style.display="";
-    sel.innerHTML=[...TFS,"CUSTOM"].map(tf=>`<option${tf==="1Y"?" selected":""}>${tf}</option>`).join("");
+    const defTf=cmpDefaultCustom?"CUSTOM":"1Y";
+    sel.innerHTML=[...TFS,"CUSTOM"].map(tf=>`<option${tf===defTf?" selected":""}>${tf}</option>`).join("");
+    if(cmpDefaultCustom){                        // seed the add-ticker dates from the chart's window
+      from.value=cmpDefaultCustom.from; to.value=cmpDefaultCustom.to;
+    }
     cmpTfSelChange();
   }
 }
@@ -865,8 +870,24 @@ function addCompareEntry(){
 function removeCompare(id){ cmpList=cmpList.filter(e=>e._id!=id); renderCompare(); }
 function openCompareTickers(ticker,tf){ cmpMode="ticker"; cmpTf=TFS.includes(tf)?tf:"1Y";
   cmpList=[{_id:++cmpIdSeq,ticker,tf:cmpTf}]; show("compareview"); renderCompareControls(); renderCompare(); }
-function openCompareTf(ticker,tf){ cmpMode="tf"; cmpList=[{_id:++cmpIdSeq,ticker,tf:TFS.includes(tf)?tf:"1Y"}];
+function openCompareTf(ticker,tf,custom){ cmpMode="tf";
+  const hasC=custom&&custom.from&&custom.to;
+  cmpDefaultCustom=hasC?{from:custom.from,to:custom.to}:null;   // pre-fills the add-ticker dates
+  cmpList=[ hasC?{_id:++cmpIdSeq,ticker,tf:"CUSTOM",from:custom.from,to:custom.to}
+                :{_id:++cmpIdSeq,ticker,tf:TFS.includes(tf)?tf:"1Y"} ];
   show("compareview"); renderCompareControls(); renderCompare(); }
+/* Open the overlay from a ticker's chart, carrying its chosen custom date range
+   (applied via Go, or just typed into the date inputs) so the first series AND the
+   add-ticker defaults use that same window. */
+function overlayFromChart(which){
+  const st=state[which], pre=which==="full"?"cf":"sec";
+  let custom=st.custom;
+  if(!custom){
+    const f=document.getElementById(pre+"-from").value, t=document.getElementById(pre+"-to").value;
+    if(f&&t) custom = f<=t?{from:f,to:t}:{from:t,to:f};
+  }
+  openCompareTf(st.ticker, st.tf, custom);
+}
 
 /* ---- financials (FA) ---- */
 let faTicker=null;
