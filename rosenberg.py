@@ -239,13 +239,15 @@ ROSENBERG_FEEDS = [
      "features": ["08dd4ba9-a87e-428f-8ca8-7a1fc39ced79",
                   "08dd4ba9-dd15-4120-8611-351228d688a4",
                   "7f7ca3f4-d4a9-4b56-9a74-f724ddf9a6ba"], "keep": 6},
+    {"code": "strategizer", "name": "Strategizer Report",
+     "bucket": "08dcb189-edd2-435c-86f2-7a9aa080a0c4", "features": [], "keep": 4},
+    {"code": "special", "name": "Special Reports",
+     "bucket": "08dcb189-1348-4872-83d0-3160af93cac8", "features": [], "keep": 5},
     {"code": "webcasts", "name": "Webcasts & Multimedia",
      "bucket": "08dcb189-c1f7-4d14-83b1-c7be65a3368a",
      "features": ["1507dad1-6f8e-4f63-a728-45e224ddcd1d"], "time": "Past", "keep": 4},
-    # NOTE: Strategizer / Special Reports / Investor Chartroom are intentionally left
-    # out — the details/search API returns stale content for their buckets that does
-    # NOT match the portal's tabs (the portal fetches those differently). Re-add once
-    # the correct current featureIds are known.
+    {"code": "chartroom", "name": "Investor Chartroom",
+     "bucket": "08dcb189-d662-4057-8339-e3fd5575a943", "features": [], "keep": 4},
 ]
 
 
@@ -257,7 +259,9 @@ def list_section(token, feed, limit=15):
         filt["featureIds"] = feed["features"]
     if feed.get("time"):
         filt["time"] = feed["time"]
-    data = _api("/api/v3/publications/details/search", token, "POST",
+    # /search (not /details/search): the plain endpoint returns PDF-only publications
+    # too (e.g. Breakfast with Dave), which details/search silently omits.
+    data = _api("/api/v3/publications/search", token, "POST",
                 {"pagination": {"limit": limit}, "filter": filt})
     items, seen = [], set()
     for it in _walk_publications(data, []):
