@@ -219,40 +219,35 @@ def _walk_publications(obj, out):
     return out
 
 
-def list_buckets(token):
-    """[(name_lowercase, id)] for the account's publication buckets (series)."""
-    try:
-        data = _api("/api/v3/buckets", token)
-    except Exception:
-        return []
-    out = []
-
-    def rec(o):
-        if isinstance(o, dict):
-            bid, name = o.get("id"), (o.get("name") or o.get("title"))
-            if isinstance(bid, str) and isinstance(name, str):
-                out.append((name.lower(), bid))
-            for v in o.values():
-                rec(v)
-        elif isinstance(o, list):
-            for v in o:
-                rec(v)
-    rec(data)
-    return out
+# Rosenberg's "Daily Reports" group and the two daily publications within it.
+# (bucketId + featureIds taken from the portal's Daily Reports list URL.)
+DAILY_BUCKET_ID = "08dcb156-1d29-4e4b-8e18-7640bf04f20d"
+DAILY_FEATURE_IDS = ["18e77d4b-7399-4453-b978-4b500f1deb55",   # Breakfast with Dave
+                     "08dce2fe-d146-478f-83eb-17ed9552eb64"]   # Early Morning with Dave
 
 
-def daily_bucket_ids(token):
-    """The bucketId(s) of the 'Daily Reports' group (Breakfast + Early Morning with Dave)."""
-    return [bid for name, bid in list_buckets(token) if "daily" in name]
+def list_daily(token, limit=15):
+    """Newest Breakfast/Early Morning notes via the details/search endpoint (keyset
+    pagination) — the same call the portal's Daily Reports page uses. Date-sorted."""
+    body = {"pagination": {"limit": limit},
+            "filter": {"bucketId": DAILY_BUCKET_ID, "featureIds": DAILY_FEATURE_IDS,
+                       "search": "", "hideLockedContent": False}}
+    data = _api("/api/v3/publications/details/search", token, "POST", body)
+    items, seen = [], set()
+    for it in _walk_publications(data, []):
+        if it["id"] not in seen:
+            seen.add(it["id"])
+            items.append(it)
+    items.sort(key=lambda x: x["date"], reverse=True)
+    return items
 
 
-def list_recent(token, limit=40, bucket_id=None):
-    filt = {"search": "", "hideLockedContent": False}
-    if bucket_id:
-        filt["bucketId"] = bucket_id                 # restrict to one publication group
+def list_recent(token, limit=40):
+    """All-groups fallback (search_fast). NOTE: this endpoint is relevance-ordered,
+    not date-ordered, so it's only a backstop — daily notes come from list_daily()."""
     body = {"semanticRatio": 0,
             "pagination": {"page": 1, "limit": limit},
-            "filter": filt}
+            "filter": {"search": "", "hideLockedContent": False}}
     data = _api("/api/v3/publications/search_fast", token, "POST", body)
     items, seen = [], set()
     for it in _walk_publications(data, []):
@@ -344,20 +339,14 @@ def sync(token=None, quiet=False, limit=40, daily_only=True, keep=10):
         token, _ = login(*creds)
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     existing = set(os.listdir(RESEARCH_DIR))
-    daily_ids = daily_bucket_ids(token) if daily_only else []
-    if daily_ids:                                    # query the Daily Reports group directly
-        pubs, seen = [], set()
-        for bid in daily_ids:
-            for p in list_recent(token, limit, bucket_id=bid):
-                if p["id"] not in seen:
-                    seen.add(p["id"])
-                    pubs.append(p)
-        pubs.sort(key=lambda x: x["date"], reverse=True)
+    if daily_only:
+        pubs = list_daily(token, limit)              # newest-first Breakfast/Early Morning
         say(f"  rosenberg: {len(pubs)} daily notes (Breakfast/Early Morning)")
+        if not pubs:                                 # fallback if the endpoint shape changed
+            pubs = list_recent(token, limit)
+            say("  rosenberg: daily endpoint empty; using latest reports instead")
     else:
-        pubs = list_recent(token, limit)             # newest-first, all groups (fallback)
-        if daily_only:
-            say("  rosenberg: daily bucket not found; using latest reports instead")
+        pubs = list_recent(token, limit)
     pubs = pubs[:keep]
     say(f"  rosenberg: {len(pubs)} report(s) to check")
     got = 0
@@ -460,5 +449,10 @@ if __name__ == "__main__":
             if os.path.exists(f):
                 os.remove(f)
         print("  rosenberg: stored login removed.")
+    elif cmd == "diag":                              # what does the live account actually return?
+        tok, _ = login(*load_creds())
+        dd = list_daily(tok, 12)
+        print("DAILY (details/search) newest:",
+              [(p["date"], p["title"][:34]) for p in dd[:8]])
     else:
         sync()
