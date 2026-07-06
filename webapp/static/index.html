@@ -720,6 +720,7 @@ function getCmpChart(){
     layout:{background:{color:"#0a0a0a"},textColor:"#888",fontFamily:"monospace"},
     grid:{vertLines:{color:"#1e1e1e"},horzLines:{color:"#1e1e1e"}},
     rightPriceScale:{borderColor:"#333",scaleMargins:{top:0.08,bottom:0.08}},
+    leftPriceScale:{visible:false,borderColor:"#333",scaleMargins:{top:0.08,bottom:0.08}},
     timeScale:{borderColor:"#333",tickMarkFormatter:t=>cmpAxisDate(t,true)},
     localization:{timeFormatter:t=>cmpAxisDate(t,false)},
     crosshair:{vertLine:{color:"#ffaf00",labelVisible:false},
@@ -771,36 +772,64 @@ async function renderCompare(){
   chart.timeScale().applyOptions({tickMarkFormatter:t=>cmpAxisDate(t,true)});
   cmpSeries.forEach(o=>chart.removeSeries(o.series)); cmpSeries=[];
   const leg=document.getElementById("cmp-legend"); leg.innerHTML="";
-  const overlay=cmpMode==="tf";              // per-window = auto-scaled SHAPE overlay
+  const overlay=cmpMode==="tf";              // overlay = REAL values on dual L/R axes (Bloomberg)
+  // Axis assignment for the real-value overlay: keep each axis readable by splitting
+  // rate% series (right) from price series (left), Bloomberg L1/R1 style. If every
+  // series is the same type: 2 → left/right, otherwise share one axis.
+  const shown=results.filter(r=>r.data&&r.data.length&&r.vals&&r.vals.length);
+  const axis=new Map();
+  if(overlay){
+    const rates=shown.filter(r=>r.rate), prices=shown.filter(r=>!r.rate);
+    if(rates.length&&prices.length){ prices.forEach(r=>axis.set(r,"left")); rates.forEach(r=>axis.set(r,"right")); }
+    else if(shown.length===2){ axis.set(shown[0],"left"); axis.set(shown[1],"right"); }
+    else shown.forEach(r=>axis.set(r,"right"));
+  }
+  const rateFmt={type:"custom",minMove:0.01,formatter:v=>v.toFixed(2)};
+  const priceFmt={type:"custom",minMove:0.01,formatter:v=>fmtCmpVal(v)};
   let i=0;
-  for(const {e,data,vals,lastVal,rate} of results){
+  for(const r of results){
+    const {e,data,vals,lastVal,rate}=r;
     if(!data.length)continue;
     const color=CMP_COLORS[i%CMP_COLORS.length];
-    const opts={color,lineWidth:2,priceLineVisible:false,lastValueVisible:!overlay,
-      priceFormat:{type:"custom",minMove:0.1,formatter:p=>(p>=0?"+":"")+p.toFixed(1)+"%"}};
-    if(overlay)opts.priceScaleId="cmp"+i;    // each on its own axis so shapes lay over each other
+    let seriesData, opts;
+    if(overlay){                               // plot actual values on the assigned L/R axis
+      seriesData=[]; for(let j=0;j<vals.length;j++) if(vals[j]!=null) seriesData.push({time:j,value:vals[j]});
+      opts={color,lineWidth:2,priceLineVisible:false,lastValueVisible:true,
+        priceScaleId:axis.get(r)||"right", priceFormat:rate?rateFmt:priceFmt};
+    }else{                                     // % change vs first point on a single axis
+      seriesData=data;
+      opts={color,lineWidth:2,priceLineVisible:false,lastValueVisible:false,
+        priceFormat:{type:"custom",minMove:0.1,formatter:p=>(p>=0?"+":"")+p.toFixed(1)+"%"}};
+    }
     const s=chart.addLineSeries(opts);
-    s.setData(data);
-    if(overlay)chart.priceScale("cmp"+i).applyOptions(
-      {visible:false,autoScale:true,scaleMargins:{top:0.1,bottom:0.1}});
-    const endPct=data[data.length-1].value;
+    s.setData(seriesData);
+    const movePct=(vals&&vals.length>1&&vals[0])?(vals[vals.length-1]/vals[0]-1)*100:data[data.length-1].value;
     const o={series:s,entry:e,vals,lastVal,rate};
     cmpSeries.push(o);
     const label=cmpMode==="tf"
       ? (e.tf==="CUSTOM"?`${e.ticker} ${shortD(e.from)}→${shortD(e.to)}`:`${e.ticker} ${e.tf}`)
       : e.ticker;
     const valStr=lastVal!=null?` <span class="cmp-val" id="cmp-val-${e._id}">${cmpFmtVal(o,lastVal)}</span>`:"";
+    // rates in the real-value overlay: show the move in points, not a % change (0.06%→3.63% isn't "+5950%")
+    let moveStr;
+    if(overlay&&rate&&vals&&vals.length>1){
+      const d=vals[vals.length-1]-vals[0];
+      moveStr=`<span class="${d>=0?'up':'down'}">${d>=0?'+':''}${d.toFixed(2)} pts</span>`;
+    }else{
+      moveStr=`<span class="${movePct>=0?'up':'down'}">${movePct>=0?'+':''}${movePct.toFixed(1)}%</span>`;
+    }
     leg.innerHTML+=`<span class="cmp-leg"><span style="color:${color}">━</span> ${esc(label)}${valStr} `
-      +`<span class="${endPct>=0?'up':'down'}">${endPct>=0?'+':''}${endPct.toFixed(1)}%</span>`
-      +`<span class="cmp-x" onclick="removeCompare(${e._id})">✕</span></span>`;
+      +moveStr+`<span class="cmp-x" onclick="removeCompare(${e._id})">✕</span></span>`;
     i++;
   }
   if(!overlay && cmpSeries.length)cmpSeries[0].series.createPriceLine(
     {price:0,color:"#555",lineWidth:1,lineStyle:2,axisLabelVisible:false});
-  chart.priceScale("right").applyOptions({visible:!overlay});
+  const axisVals=[...axis.values()];
+  chart.priceScale("left").applyOptions({visible:overlay&&axisVals.includes("left")});
+  chart.priceScale("right").applyOptions({visible:!overlay||axisVals.includes("right")});
   chart.timeScale().fitContent();
   document.getElementById("cmp-title").textContent=
-    overlay?"COMPARE · overlay (auto-scaled shapes)":`COMPARE · ${cmpTf} · % change`;
+    overlay?"COMPARE · overlay (actual values · L/R axes)":`COMPARE · ${cmpTf} · % change`;
 }
 function renderCompareControls(){
   const tfbar=document.getElementById("cmp-tfbar"), sel=document.getElementById("cmp-add-tf"),
