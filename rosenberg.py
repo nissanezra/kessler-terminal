@@ -219,43 +219,51 @@ def _walk_publications(obj, out):
     return out
 
 
-# Rosenberg's "Daily Reports" group and the two daily publications within it.
-# (bucketId + featureIds taken from the portal's Daily Reports list URL.)
-DAILY_BUCKET_ID = "08dcb156-1d29-4e4b-8e18-7640bf04f20d"
-DAILY_FEATURE_IDS = ["18e77d4b-7399-4453-b978-4b500f1deb55",   # Breakfast with Dave
-                     "08dce2fe-d146-478f-83eb-17ed9552eb64"]   # Early Morning with Dave
+# Rosenberg's publication sections — bucketId + featureIds taken straight from each
+# portal "publications-list" URL. `code` prefixes the saved filenames so the terminal
+# can group them into one section per category; `keep` = how many newest to hold.
+ROSENBERG_FEEDS = [
+    {"code": "daily", "name": "Daily Reports",
+     "bucket": "08dcb156-1d29-4e4b-8e18-7640bf04f20d",
+     "features": ["18e77d4b-7399-4453-b978-4b500f1deb55",     # Breakfast with Dave
+                  "08dce2fe-d146-478f-83eb-17ed9552eb64"],    # Early Morning with Dave
+     "keep": 10},
+    {"code": "macro", "name": "Macro Research",
+     "bucket": "08dcb188-f40e-40bf-8e74-af88ab237f7c",
+     "features": ["2290f675-fc5d-452e-aca0-acd6455fa76c",
+                  "59b8bb4e-9c55-4474-8be7-b1b8075107dc",
+                  "08dce95d-8707-4b36-815f-bd78a65b0923",
+                  "08dcb185-f704-442d-8ea4-562138074ae6"], "keep": 6},
+    {"code": "strategy", "name": "Market Strategy",
+     "bucket": "08dcb189-327b-48ab-8243-f1c8b4f306f3",
+     "features": ["08dd4ba9-a87e-428f-8ca8-7a1fc39ced79",
+                  "08dd4ba9-dd15-4120-8611-351228d688a4",
+                  "7f7ca3f4-d4a9-4b56-9a74-f724ddf9a6ba"], "keep": 6},
+    {"code": "webcasts", "name": "Webcasts & Multimedia",
+     "bucket": "08dcb189-c1f7-4d14-83b1-c7be65a3368a",
+     "features": ["1507dad1-6f8e-4f63-a728-45e224ddcd1d"], "time": "Past", "keep": 4},
+    # NOTE: Strategizer / Special Reports / Investor Chartroom are intentionally left
+    # out — the details/search API returns stale content for their buckets that does
+    # NOT match the portal's tabs (the portal fetches those differently). Re-add once
+    # the correct current featureIds are known.
+]
 
 
-def list_daily(token, limit=15):
-    """Newest Breakfast/Early Morning notes via the details/search endpoint (keyset
-    pagination) — the same call the portal's Daily Reports page uses. Date-sorted."""
-    body = {"pagination": {"limit": limit},
-            "filter": {"bucketId": DAILY_BUCKET_ID, "featureIds": DAILY_FEATURE_IDS,
-                       "search": "", "hideLockedContent": False}}
-    data = _api("/api/v3/publications/details/search", token, "POST", body)
+def list_section(token, feed, limit=15):
+    """Newest publications in one section via the portal's details/search endpoint
+    (keyset pagination, date-sorted). Filters by bucketId + featureIds (+ time)."""
+    filt = {"bucketId": feed["bucket"], "search": "", "hideLockedContent": False}
+    if feed.get("features"):
+        filt["featureIds"] = feed["features"]
+    if feed.get("time"):
+        filt["time"] = feed["time"]
+    data = _api("/api/v3/publications/details/search", token, "POST",
+                {"pagination": {"limit": limit}, "filter": filt})
     items, seen = [], set()
     for it in _walk_publications(data, []):
         if it["id"] not in seen:
             seen.add(it["id"])
             items.append(it)
-    items.sort(key=lambda x: x["date"], reverse=True)
-    return items
-
-
-def list_recent(token, limit=40):
-    """All-groups fallback (search_fast). NOTE: this endpoint is relevance-ordered,
-    not date-ordered, so it's only a backstop — daily notes come from list_daily()."""
-    body = {"semanticRatio": 0,
-            "pagination": {"page": 1, "limit": limit},
-            "filter": {"search": "", "hideLockedContent": False}}
-    data = _api("/api/v3/publications/search_fast", token, "POST", body)
-    items, seen = [], set()
-    for it in _walk_publications(data, []):
-        if it["id"] not in seen:
-            seen.add(it["id"])
-            items.append(it)
-    # newest first, regardless of the API's default ordering, so a report published
-    # today is always at the top and never falls outside the downloaded set.
     items.sort(key=lambda x: x["date"], reverse=True)
     return items
 
@@ -324,9 +332,10 @@ def _safe_name(title, date):
     return f"{base}_{date}.pdf"
 
 
-def sync(token=None, quiet=False, limit=40, daily_only=True, keep=10):
-    """Download recent reports not already saved. `daily_only` keeps just Breakfast
-    with Dave + Early Morning with Dave; `keep` caps to the newest N. Returns count."""
+def sync(token=None, quiet=False):
+    """Download the newest reports from every Rosenberg section not already saved.
+    Filenames are prefixed `rr_<code>__` so the terminal groups them by section.
+    Returns the number of new files downloaded."""
     def say(m):
         if not quiet:
             print(m)
@@ -339,28 +348,25 @@ def sync(token=None, quiet=False, limit=40, daily_only=True, keep=10):
         token, _ = login(*creds)
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     existing = set(os.listdir(RESEARCH_DIR))
-    if daily_only:
-        pubs = list_daily(token, limit)              # newest-first Breakfast/Early Morning
-        say(f"  rosenberg: {len(pubs)} daily notes (Breakfast/Early Morning)")
-        if not pubs:                                 # fallback if the endpoint shape changed
-            pubs = list_recent(token, limit)
-            say("  rosenberg: daily endpoint empty; using latest reports instead")
-    else:
-        pubs = list_recent(token, limit)
-    pubs = pubs[:keep]
-    say(f"  rosenberg: {len(pubs)} report(s) to check")
     got = 0
-    for p in pubs:
-        name = _safe_name(p["title"], p["date"])
-        if name in existing:
-            continue
+    for feed in ROSENBERG_FEEDS:
         try:
-            download_pdf(token, p["id"], os.path.join(RESEARCH_DIR, name))
-            existing.add(name)
-            got += 1
-            say(f"    + {name}")
+            pubs = list_section(token, feed)[:feed.get("keep", 6)]
         except Exception as e:
-            say(f"    x {p['title'][:48]} — {e}")
+            say(f"  rosenberg: {feed['name']} — list failed: {e}")
+            continue
+        say(f"  rosenberg: {feed['name']}: {len(pubs)} newest")
+        for p in pubs:
+            name = f"rr_{feed['code']}__" + _safe_name(p["title"], p["date"])
+            if name in existing:
+                continue
+            try:
+                download_pdf(token, p["id"], os.path.join(RESEARCH_DIR, name))
+                existing.add(name)
+                got += 1
+                say(f"    + {name}")
+            except Exception as e:
+                say(f"    x {p['title'][:44]} — {e}")
     say(f"  rosenberg: {got} new report(s) downloaded" if got
         else "  rosenberg: up to date")
     return got
@@ -430,12 +436,12 @@ def auto():
 
 
 def sync_cloud():
-    """Cloud (Fly) entry point: login from env secrets, daily notes only, newest 10."""
+    """Cloud (Fly) entry point: login from env secrets, sync every section."""
     creds = load_creds()
     if not creds:
         return 0
     token, _ = login(*creds)
-    return sync(token=token, quiet=True, daily_only=True, keep=10)
+    return sync(token=token, quiet=True)
 
 
 if __name__ == "__main__":
@@ -449,10 +455,10 @@ if __name__ == "__main__":
             if os.path.exists(f):
                 os.remove(f)
         print("  rosenberg: stored login removed.")
-    elif cmd == "diag":                              # what does the live account actually return?
+    elif cmd == "diag":                              # newest per section (sanity check)
         tok, _ = login(*load_creds())
-        dd = list_daily(tok, 12)
-        print("DAILY (details/search) newest:",
-              [(p["date"], p["title"][:34]) for p in dd[:8]])
+        for feed in ROSENBERG_FEEDS:
+            s = list_section(tok, feed, 6)
+            print(feed["name"], "->", [(p["date"], p["title"][:26]) for p in s[:3]])
     else:
         sync()

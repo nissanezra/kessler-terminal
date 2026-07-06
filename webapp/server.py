@@ -1026,23 +1026,52 @@ async def _econ_releases_section(session):
     return sec
 
 
+# Auto-downloaded Rosenberg files are named `rr_<code>__<title>.pdf`; group them into
+# one section per category, in this order. Anything else in research/ (manual drops) is
+# shown under a generic "Research Reports" section.
+ROSENBERG_SECTIONS = [
+    ("daily", "Rosenberg · Daily Reports"), ("macro", "Rosenberg · Macro Research"),
+    ("strategy", "Rosenberg · Market Strategy"), ("strategizer", "Rosenberg · Strategizer"),
+    ("special", "Rosenberg · Special Reports"), ("webcasts", "Rosenberg · Webcasts"),
+    ("chartroom", "Rosenberg · Investor Chartroom"),
+]
+
+
 async def api_research(request):
     """Research view: saved files (drop into research/) + public feeds."""
     RESEARCH_DIR.mkdir(exist_ok=True)
-    files = []
+    groups, other = {}, []                        # groups: code -> [items]
     for p in RESEARCH_DIR.iterdir():
-        if p.is_file() and p.suffix.lower() in _RESEARCH_EXT and not p.name.startswith("."):
-            st = p.stat()
-            files.append({"kind": "file", "file": p.name, "title": p.stem,
-                          "ext": p.suffix.lower().lstrip("."), "_m": st.st_mtime})
-    files.sort(key=lambda x: x["_m"], reverse=True)
-    files = files[:10]                            # show only the 10 newest reports
-    for it in files:
-        it["meta"] = datetime.fromtimestamp(it.pop("_m")).strftime("%b %d, %Y")
+        if not (p.is_file() and p.suffix.lower() in _RESEARCH_EXT
+                and not p.name.startswith(".")):
+            continue
+        m = re.match(r"rr_([a-z]+)__(.+)", p.stem)
+        title = m.group(2) if m else p.stem
+        dm = re.search(r"(\d{4}-\d{2}-\d{2})$", title)   # report date lives at the end
+        item = {"kind": "file", "file": p.name,
+                "title": re.sub(r"_?\d{4}-\d{2}-\d{2}$", "", title),  # drop the date suffix
+                "ext": p.suffix.lower().lstrip("."),
+                "_m": p.stat().st_mtime, "_d": dm.group(1) if dm else ""}
+        (groups.setdefault(m.group(1), []) if m else other).append(item)
+
+    def _finish(items, cap):
+        items.sort(key=lambda x: (x["_d"], x["_m"]), reverse=True)   # newest report first
+        items = items[:cap]
+        for it in items:
+            d, mt = it.pop("_d"), it.pop("_m")
+            try:
+                it["meta"] = (datetime.strptime(d, "%Y-%m-%d") if d
+                              else datetime.fromtimestamp(mt)).strftime("%b %d, %Y")
+            except ValueError:
+                it["meta"] = d or ""
+        return items
 
     sections = []
-    if files:
-        sections.append({"name": "Rosenberg Research", "items": files})
+    for code, name in ROSENBERG_SECTIONS:
+        if groups.get(code):
+            sections.append({"name": name, "items": _finish(groups[code], 12)})
+    if other:
+        sections.append({"name": "Research Reports", "items": _finish(other, 12)})
     session = request.app["session"]
     # Own session with raised header limits: some gov sites send oversized CSP headers
     # that trip aiohttp's default 8190-byte cap (same issue BMO's sitemap has).
