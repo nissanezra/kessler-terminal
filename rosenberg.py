@@ -201,15 +201,42 @@ def _api(path, token, method="GET", body=None, raw=False):
     return (blob, ctype) if raw else json.loads(blob)
 
 
+# The two daily flagship notes. A report's publication series appears somewhere in
+# its metadata (not its headline title), so we match against a text blob of the item.
+DAILY_SERIES = ("breakfast with dave", "early morning with dave")
+
+
+def _item_blob(obj):
+    """Short-string text of a publication item (for series matching) — skips long
+    body/HTML fields so it stays small and only carries labels/names."""
+    parts = []
+
+    def rec(x, depth):
+        if depth > 3:
+            return
+        if isinstance(x, str):
+            if len(x) <= 120:
+                parts.append(x)
+        elif isinstance(x, dict):
+            for v in x.values():
+                rec(v, depth + 1)
+        elif isinstance(x, list):
+            for v in x[:25]:
+                rec(v, depth + 1)
+    rec(obj, 0)
+    return " ".join(parts).lower()
+
+
 def _walk_publications(obj, out):
-    """Collect report items (id + title + date) from an unknown-shaped response."""
+    """Collect report items (id + title + date + text blob) from an unknown-shaped response."""
     if isinstance(obj, dict):
         pid = obj.get("id")
         title = obj.get("title") or obj.get("name")
         date = (obj.get("publicationDate") or obj.get("date")
                 or obj.get("publishedAt") or obj.get("createdAt"))
         if isinstance(pid, str) and title and date:
-            out.append({"id": pid, "title": title, "date": str(date)[:10]})
+            out.append({"id": pid, "title": title, "date": str(date)[:10],
+                        "blob": _item_blob(obj)})
         for v in obj.values():
             _walk_publications(v, out)
     elif isinstance(obj, list):
@@ -274,6 +301,10 @@ def save_creds(email, password):
 
 
 def load_creds():
+    # cloud (Fly) supplies the login as env secrets; the desktop build uses the local file
+    env_e, env_p = os.environ.get("ROSENBERG_EMAIL"), os.environ.get("ROSENBERG_PASSWORD")
+    if env_e and env_p:
+        return env_e, env_p
     if not os.path.exists(CRED_FILE):
         return None
     try:
@@ -294,8 +325,9 @@ def _safe_name(title, date):
     return f"{base}_{date}.pdf"
 
 
-def sync(token=None, quiet=False, limit=25):
-    """Download any recent reports not already saved. Returns count downloaded."""
+def sync(token=None, quiet=False, limit=40, daily_only=True, keep=10):
+    """Download recent reports not already saved. `daily_only` keeps just Breakfast
+    with Dave + Early Morning with Dave; `keep` caps to the newest N. Returns count."""
     def say(m):
         if not quiet:
             print(m)
@@ -308,8 +340,16 @@ def sync(token=None, quiet=False, limit=25):
         token, _ = login(*creds)
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     existing = set(os.listdir(RESEARCH_DIR))
-    pubs = list_recent(token, limit)
-    say(f"  rosenberg: {len(pubs)} recent reports listed")
+    pubs = list_recent(token, limit)                 # already newest-first
+    if daily_only:
+        picked = [p for p in pubs if any(s in p.get("blob", "") for s in DAILY_SERIES)]
+        if picked:
+            say(f"  rosenberg: {len(picked)} daily notes (Breakfast/Early Morning) found")
+            pubs = picked
+        else:                                        # series label not detected — don't end up empty
+            say("  rosenberg: daily filter matched none; using latest reports instead")
+    pubs = pubs[:keep]
+    say(f"  rosenberg: {len(pubs)} report(s) to check")
     got = 0
     for p in pubs:
         name = _safe_name(p["title"], p["date"])
@@ -388,6 +428,15 @@ def auto():
             print(f"  rosenberg: skipped — {e}")
     elif not os.path.exists(SKIP_FILE):
         interactive_setup()
+
+
+def sync_cloud():
+    """Cloud (Fly) entry point: login from env secrets, daily notes only, newest 10."""
+    creds = load_creds()
+    if not creds:
+        return 0
+    token, _ = login(*creds)
+    return sync(token=token, quiet=True, daily_only=True, keep=10)
 
 
 if __name__ == "__main__":

@@ -1036,6 +1036,7 @@ async def api_research(request):
             files.append({"kind": "file", "file": p.name, "title": p.stem,
                           "ext": p.suffix.lower().lstrip("."), "_m": st.st_mtime})
     files.sort(key=lambda x: x["_m"], reverse=True)
+    files = files[:10]                            # show only the 10 newest reports
     for it in files:
         it["meta"] = datetime.fromtimestamp(it.pop("_m")).strftime("%b %d, %Y")
 
@@ -1516,11 +1517,28 @@ async def app_manifest(request):
     return web.json_response(m, content_type="application/manifest+json")
 
 
+async def _rosenberg_cloud_loop():
+    """Cloud copy only: if Rosenberg creds are set (Fly secrets), download the daily
+    Breakfast/Early Morning notes into research/ on startup and every 6h, so the
+    hosted app (desktop + phone) shows them. No-op when the secrets aren't set."""
+    if not (os.environ.get("ROSENBERG_EMAIL") and os.environ.get("ROSENBERG_PASSWORD")):
+        return
+    import rosenberg                              # sibling module (pure stdlib)
+    while True:
+        try:
+            n = await asyncio.to_thread(rosenberg.sync_cloud)
+            print(f"  rosenberg cloud: {n} new report(s)")
+        except Exception as e:
+            print(f"  rosenberg cloud: error — {e}")
+        await asyncio.sleep(6 * 3600)
+
+
 async def on_start(app):
     app["session"] = aiohttp.ClientSession()
     for fn in (dash.cnbc_loop, dash.binance_loop, dash.fred_loop, dash.cftc_loop):
         app["tasks"].append(asyncio.create_task(fn()))
     app["tasks"].append(asyncio.create_task(monitor_broadcast(app)))
+    app["tasks"].append(asyncio.create_task(_rosenberg_cloud_loop()))
 
 
 async def on_cleanup(app):
