@@ -430,18 +430,20 @@ def interactive_setup():
 
 
 def _ensure_schedule():
-    """Register a weekday-morning download task once (Windows Task Scheduler)."""
+    """Register the download task. Runs every 3h from 09:00 so the ~8am reports are
+    pulled shortly after release (and again through the day) even if the app is closed."""
     if os.name != "nt":
         return
-    marker = os.path.join(HERE, ".rosenberg_sched")
+    # marker bumped to _sched3 so existing installs re-create with the new time/cadence
+    marker = os.path.join(HERE, ".rosenberg_sched3")
     if os.path.exists(marker):
         return
     try:
         import subprocess
         cmd = '"%s" "%s" sync' % (sys.executable, os.path.join(HERE, "rosenberg.py"))
-        subprocess.run(["schtasks", "/Create", "/SC", "WEEKLY",
-                        "/D", "MON,TUE,WED,THU,FRI", "/TN", "KesslerRosenberg",
-                        "/TR", cmd, "/ST", "07:30", "/F"],
+        subprocess.run(["schtasks", "/Create", "/SC", "HOURLY", "/MO", "3",
+                        "/TN", "KesslerRosenberg",
+                        "/TR", cmd, "/ST", "09:00", "/F"],
                        capture_output=True, timeout=30)
         open(marker, "w").close()
     except Exception:

@@ -1571,7 +1571,7 @@ async def _rosenberg_cloud_loop():
             print(f"  rosenberg cloud: sync done — {n} new report(s)", flush=True)
         except Exception:
             print("  rosenberg cloud ERROR:\n" + traceback.format_exc(), flush=True)
-        await asyncio.sleep(6 * 3600)
+        await asyncio.sleep(2 * 3600)             # check every 2h so morning reports arrive fast
 
 
 async def on_start(app):
