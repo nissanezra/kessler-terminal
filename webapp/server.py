@@ -1327,7 +1327,7 @@ async def api_summarize(request):
             "Do not add any preamble before the first header.\n\n"
             f"TITLE: {title}\n\nREPORT:\n{text}"
         )
-        max_out = 2600
+        max_out = 3200
         models = ("gemini-2.5-flash", "gemini-2.5-flash-lite")
     else:
         text = text[:30000]
@@ -1342,11 +1342,15 @@ async def api_summarize(request):
             "Do not add any preamble, title, or closing remark.\n\n"
             f"TITLE: {title}\n\nTEXT:\n{text}"
         )
-        max_out = 900
+        max_out = 1400
         models = _GEMINI_MODELS
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_out},
+        # thinkingBudget 0 turns off the model's internal "thinking" (Gemini 2.5
+        # spends output tokens on it by default) so the whole budget goes to the
+        # visible summary — otherwise long summaries get truncated mid-sentence.
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_out,
+                             "thinkingConfig": {"thinkingBudget": 0}},
     }
     hdrs = {"x-goog-api-key": key, "Content-Type": "application/json"}
     last_err = "Couldn't summarize this one."
