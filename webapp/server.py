@@ -32,6 +32,35 @@ import dashboard as dash       # noqa: E402
 import terminal_data as td     # noqa: E402
 
 
+# ---- Gemini API key (AI summaries) -----------------------------------------
+# Cloud (Fly) supplies it as the env secret GEMINI_API_KEY. Desktop builds read
+# it from a local obfuscated dotfile so the shared key never lives in the public
+# repo. The dotfile leading-dot keeps the auto-updater's _safe filter from
+# touching it (same approach as the Rosenberg creds).
+import base64, platform  # noqa: E402
+
+GEMINI_KEY_FILE = HERE / ".gemini_key"
+
+
+def _gk_xor(data):
+    k = hashlib.sha256(("kkt-gemini::" + platform.node()).encode()).digest()
+    return bytes(b ^ k[i % len(k)] for i, b in enumerate(data))
+
+
+def save_gemini_key(key):
+    GEMINI_KEY_FILE.write_bytes(base64.b64encode(_gk_xor(key.strip().encode())))
+
+
+def _gemini_key():
+    k = os.environ.get("GEMINI_API_KEY", "").strip()
+    if k:
+        return k
+    try:
+        return _gk_xor(base64.b64decode(GEMINI_KEY_FILE.read_bytes())).decode().strip()
+    except Exception:
+        return ""
+
+
 def build_monitor():
     """Current monitor state, mirroring dashboard.render()'s layout."""
     ncols = max(c for c, *_ in dash.SECTIONS) + 1
@@ -1188,6 +1217,107 @@ async def api_article(request):
     return web.json_response(art)
 
 
+# ---- AI summarize (Google Gemini, free tier) -------------------------------
+# flash-lite first: much higher free-tier limits, fast, and plenty good for
+# summaries. Full flash is the fallback if lite is momentarily busy.
+_GEMINI_MODELS = ("gemini-2.5-flash-lite", "gemini-2.5-flash")
+_GEMINI_TRIES = 2          # attempts per model (503 "high demand" is intermittent)
+
+
+def _gemini_url(model):
+    return ("https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent")
+
+
+async def api_summarize(request):
+    """Summarize the currently-open article / report text via Gemini.
+
+    The reader POSTs the visible text so this works uniformly for news and
+    saved Rosenberg reports without re-fetching or re-extracting server-side.
+    """
+    key = _gemini_key()
+    if not key:
+        return web.json_response(
+            {"error": "AI summaries aren't set up on this terminal yet."}, status=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = (body.get("text") or "").strip()
+    title = (body.get("title") or "").strip()
+    if len(text) < 200:
+        return web.json_response(
+            {"error": "Not enough text to summarize."}, status=400)
+    text = text[:30000]                                   # keep the request fast/cheap
+    prompt = (
+        "You are a sharp financial-markets analyst. Summarize the "
+        f"{'report' if body.get('kind') == 'report' else 'article'} below for a "
+        "busy reader who wants the gist fast.\n\n"
+        "Format:\n"
+        "- One short overview sentence.\n"
+        "- Then 3 to 6 bullet points of the key takeaways.\n"
+        "Keep specific numbers, names, and dates. Be concise and neutral. "
+        "Do not use em dashes anywhere; use commas or periods instead. "
+        "Do not add any preamble, title, or closing remark.\n\n"
+        f"TITLE: {title}\n\nTEXT:\n{text}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 900},
+    }
+    hdrs = {"x-goog-api-key": key, "Content-Type": "application/json"}
+    last_err = "Couldn't summarize this one."
+    # Try each model with one retry, so a transient "high demand" blip on the
+    # primary model doesn't fail the summary.
+    for model in _GEMINI_MODELS:
+        for attempt in range(_GEMINI_TRIES):
+            try:
+                async with request.app["session"].post(
+                    _gemini_url(model), headers=hdrs, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=45),
+                ) as r:
+                    data = await r.json()
+                if r.status == 200:
+                    try:
+                        summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    except Exception:
+                        summary = ""
+                    if summary:
+                        return web.json_response({"summary": summary})
+                    last_err = "Gemini returned an empty summary."
+                    break                                  # empty -> try next model, don't retry
+                last_err = (((data or {}).get("error") or {}).get("message")
+                            or f"Gemini error {r.status}")
+                if r.status not in (429, 500, 502, 503):
+                    return web.json_response({"error": last_err}, status=502)
+            except Exception as e:
+                last_err = f"Couldn't reach Gemini: {e}"
+            if attempt < _GEMINI_TRIES - 1:
+                await asyncio.sleep(1.0 + attempt)         # 1s, 2s backoff between tries
+    return web.json_response(
+        {"error": "Gemini is busy right now. Give it a few seconds and tap Summarize again."},
+        status=502)
+
+
+async def api_set_gemini(request):
+    """Store a Gemini API key on THIS terminal (desktop builds) so summaries work
+    without touching the repo. No-op on the cloud app, where the env secret wins."""
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return web.json_response({"ok": True, "note": "already active"})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    key = (body.get("key") or "").strip()
+    if len(key) < 20:
+        return web.json_response({"error": "That doesn't look like a valid key."}, status=400)
+    try:
+        save_gemini_key(key)
+    except Exception as e:
+        return web.json_response({"error": f"Couldn't save the key: {e}"}, status=500)
+    return web.json_response({"ok": True})
+
+
 # Hosts we refuse to proxy — the embed endpoint fetches arbitrary URLs, so keep it from
 # being used to reach this machine / the LAN from a phone on the same Wi-Fi.
 _EMBED_BLOCK = re.compile(
@@ -1613,6 +1743,8 @@ def make_app():
     app.router.add_get("/api/research", api_research)
     app.router.add_get("/api/research/read", api_research_read)
     app.router.add_get("/api/article", api_article)
+    app.router.add_post("/api/summarize", api_summarize)
+    app.router.add_post("/api/set_gemini", api_set_gemini)
     app.router.add_get("/api/embed", api_embed)
     app.router.add_static("/static/", HERE / "static")
     app.on_startup.append(on_start)
@@ -1632,6 +1764,15 @@ def _lan_ip():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "set-gemini":
+        import getpass
+        k = getpass.getpass("  Paste your Gemini API key (hidden): ").strip()
+        if k:
+            save_gemini_key(k)
+            print("  Saved. AI summaries are now on — restart the terminal.")
+        else:
+            print("  Nothing entered; no change.")
+        sys.exit(0)
     host = os.environ.get("MKT_HOST", "127.0.0.1")   # 0.0.0.0 = LAN/phone access
     port = int(os.environ.get("MKT_PORT") or os.environ.get("PORT") or "8787")
     print(f"  Kessler-Katznelson web  ->  http://127.0.0.1:{port}", flush=True)
