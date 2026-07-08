@@ -61,6 +61,31 @@ def _gemini_key():
         return ""
 
 
+# ---- research mirror (desktop shows the shared cloud app's reports) ---------
+# A family desktop that isn't the subscription source can display the SAME
+# Rosenberg reports the shared cloud app already holds, by MIRRORING the files
+# from it (rather than the desktop independently logging into the subscription).
+# Config = the app URL + its password; stored locally (obfuscated) or via env.
+MIRROR_FILE = HERE / ".research_mirror"
+
+
+def save_mirror_cfg(url, key):
+    blob = json.dumps({"url": url.strip().rstrip("/"), "key": key.strip()}).encode()
+    MIRROR_FILE.write_bytes(base64.b64encode(_gk_xor(blob)))
+
+
+def _mirror_cfg():
+    url = os.environ.get("RESEARCH_MIRROR_URL", "").strip()
+    key = os.environ.get("RESEARCH_MIRROR_KEY", "").strip()
+    if url and key:
+        return url.rstrip("/"), key
+    try:
+        d = json.loads(_gk_xor(base64.b64decode(MIRROR_FILE.read_bytes())).decode())
+        return d["url"].rstrip("/"), d["key"]
+    except Exception:
+        return None
+
+
 def build_monitor():
     """Current monitor state, mirroring dashboard.render()'s layout."""
     ncols = max(c for c, *_ in dash.SECTIONS) + 1
@@ -1177,6 +1202,34 @@ async def api_research_read(request):
     return web.json_response({"title": p.stem, "paragraphs": paras})
 
 
+# Auto-pulled Rosenberg report filenames look like  rr_<code>__<title>_<date>.pdf
+_RR_RE = re.compile(r"^rr_[a-z]+__.+\.pdf$", re.I)
+
+
+async def api_research_manifest(request):
+    """List the auto-pulled Rosenberg report PDFs + their real titles, so a family
+    desktop can mirror the same files this shared app already holds. Behind auth."""
+    RESEARCH_DIR.mkdir(exist_ok=True)
+    files = {p.name: int(p.stat().st_size) for p in RESEARCH_DIR.iterdir()
+             if p.is_file() and _RR_RE.match(p.name)}
+    try:
+        titles = json.loads((RESEARCH_DIR / ".rr_titles.json").read_text(encoding="utf-8"))
+    except Exception:
+        titles = {}
+    return web.json_response({"files": files, "titles": titles})
+
+
+async def api_research_raw(request):
+    """Serve one report PDF by name for the mirror client (report files only)."""
+    name = request.query.get("file", "")
+    p = RESEARCH_DIR / name
+    safe = bool(name) and "/" not in name and "\\" not in name and _RR_RE.match(name) \
+        and p.resolve().parent == RESEARCH_DIR.resolve()
+    if not (safe and p.is_file()):
+        return web.Response(status=404, text="not found")
+    return web.FileResponse(p)
+
+
 # Phrases that mark a bot-wall / paywall / consent shell rather than real article text.
 # STRONG markers are unambiguous (a real article won't contain them); WEAK markers only
 # count when the page is short or errored (they can appear inside legitimate prose).
@@ -1720,6 +1773,64 @@ async def app_manifest(request):
     return web.json_response(m, content_type="application/manifest+json")
 
 
+async def _mirror_once(session, url, key):
+    """Pull any report PDFs the shared app has that we don't, into local research/."""
+    RESEARCH_DIR.mkdir(exist_ok=True)
+    # ?k=<pw> makes auth_mw set the cookie via a 302; aiohttp follows it and keeps
+    # the cookie for the rest of this session, so later /raw calls are authed too.
+    async with session.get(f"{url}/api/research/manifest", params={"k": key},
+                           timeout=aiohttp.ClientTimeout(total=30)) as r:
+        if r.status != 200:
+            raise RuntimeError(f"manifest HTTP {r.status}")
+        data = await r.json()
+    remote = data.get("files") or {}
+    new = 0
+    for name, size in remote.items():
+        if not _RR_RE.match(name):
+            continue
+        dst = RESEARCH_DIR / name
+        if dst.exists() and dst.stat().st_size == size:
+            continue
+        async with session.get(f"{url}/api/research/raw", params={"file": name},
+                               timeout=aiohttp.ClientTimeout(total=60)) as fr:
+            if fr.status != 200:
+                continue
+            body = await fr.read()
+        tmp = dst.with_suffix(dst.suffix + ".part")
+        tmp.write_bytes(body)
+        tmp.replace(dst)
+        new += 1
+    # merge the real-headline sidecar so titles show cleanly, not filenames
+    tf = RESEARCH_DIR / ".rr_titles.json"
+    try:
+        cur = json.loads(tf.read_text(encoding="utf-8"))
+    except Exception:
+        cur = {}
+    cur.update(data.get("titles") or {})
+    tf.write_text(json.dumps(cur), encoding="utf-8")
+    return new
+
+
+async def _research_mirror_loop(app):
+    """Desktop only: mirror the shared cloud app's Rosenberg reports into local
+    research/ so this terminal shows the same reports the shared app already holds.
+    No-op on the cloud source (its own ROSENBERG creds) and when unconfigured."""
+    if os.environ.get("ROSENBERG_EMAIL"):         # this IS the source — don't mirror
+        return
+    cfg = _mirror_cfg()
+    if not cfg:
+        return
+    url, key = cfg
+    import traceback
+    while True:
+        try:
+            n = await _mirror_once(app["session"], url, key)
+            print(f"  research mirror: {n} new report(s) from {url}", flush=True)
+        except Exception:
+            print("  research mirror ERROR:\n" + traceback.format_exc(), flush=True)
+        await asyncio.sleep(2 * 3600)             # check every 2h
+
+
 async def _rosenberg_cloud_loop():
     """Cloud copy only: if Rosenberg creds are set (Fly secrets), download the daily
     Breakfast/Early Morning notes into research/ on startup and every 6h, so the
@@ -1743,6 +1854,7 @@ async def on_start(app):
         app["tasks"].append(asyncio.create_task(fn()))
     app["tasks"].append(asyncio.create_task(monitor_broadcast(app)))
     app["tasks"].append(asyncio.create_task(_rosenberg_cloud_loop()))
+    app["tasks"].append(asyncio.create_task(_research_mirror_loop(app)))
 
 
 async def on_cleanup(app):
@@ -1772,6 +1884,8 @@ def make_app():
     app.router.add_get("/api/news_board", api_news_board)
     app.router.add_get("/api/research", api_research)
     app.router.add_get("/api/research/read", api_research_read)
+    app.router.add_get("/api/research/manifest", api_research_manifest)
+    app.router.add_get("/api/research/raw", api_research_raw)
     app.router.add_get("/api/article", api_article)
     app.router.add_post("/api/summarize", api_summarize)
     app.router.add_post("/api/set_gemini", api_set_gemini)
@@ -1800,6 +1914,18 @@ if __name__ == "__main__":
         if k:
             save_gemini_key(k)
             print("  Saved. AI summaries are now on — restart the terminal.")
+        else:
+            print("  Nothing entered; no change.")
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "set-mirror":
+        import getpass
+        u = (sys.argv[2] if len(sys.argv) > 2 else
+             input("  Shared app URL [https://kessler-terminal.fly.dev]: ").strip()
+             or "https://kessler-terminal.fly.dev")
+        k = getpass.getpass("  Shared app password (hidden): ").strip()
+        if k:
+            save_mirror_cfg(u, k)
+            print(f"  Saved. This terminal will mirror reports from {u.rstrip('/')} — restart it.")
         else:
             print("  Nothing entered; no change.")
         sys.exit(0)
