@@ -1264,7 +1264,7 @@ function resetSummary(){
 }
 /* Turn Gemini's markdown-ish reply into safe HTML: section headers -> subhead,
    bullet runs -> <ul>, everything else -> <p>. */
-const _SUM_HEADS=/^(thesis|key points|key takeaways|markets and positioning|positioning|risks and caveats|risks|bottom line|overview|summary)\b/i;
+const _SUM_HEADS=/^(thesis|key points|key takeaways|markets and positioning|positioning|risks and caveats|risks|bottom line|overview|summary|markets|market drivers|drivers|rosenberg view|top stories)\b/i;
 function fmtSummary(txt){
   const lines=String(txt||"").split(/\r?\n/); let out="", ul=false;
   const strip=s=>esc(s.replace(/\*\*(.+?)\*\*/g,"$1").replace(/^#+\s*/,"").trim());

@@ -1432,13 +1432,27 @@ async def _gather_brief_data(session):
         titles = json.loads((RESEARCH_DIR / ".rr_titles.json").read_text(encoding="utf-8"))
     except Exception:
         titles = {}
+    daily = []                                        # (date, path) for the daily notes
     if RESEARCH_DIR.exists():
         for p in sorted(RESEARCH_DIR.glob("rr_*.pdf")):
             dm = re.search(r"(\d{4}-\d{2}-\d{2})", p.stem)
             d = dm.group(1) if dm else ""
             if d and d >= cutoff:
                 reports.append(f"- {_clean_report_title(titles.get(p.name) or p.stem)} ({d})")
-    return market, news, "\n".join(reports[:20])
+                if p.name.startswith("rr_daily__"):
+                    daily.append((d, p))
+    # Full text of the 2 most recent daily notes (Breakfast/Early Morning with Dave)
+    # so the brief can tie Rosenberg's ACTUAL views to today's tape, not just titles.
+    daily.sort(reverse=True)
+    detail = []
+    for d, p in daily[:2]:
+        try:
+            paras = await asyncio.to_thread(_pdf_paragraphs, p)
+            body = " ".join(paras)[:9000]
+            detail.append(f"### {_clean_report_title(titles.get(p.name) or p.stem)} ({d})\n{body}")
+        except Exception:
+            pass
+    return market, news, "\n".join(reports[:20]), "\n\n".join(detail)
 
 
 async def api_daily_brief(request):
@@ -1450,28 +1464,39 @@ async def api_daily_brief(request):
             {"error": "AI isn't set up on this terminal yet. Open a report and tap "
                       "Summarize once to add your Gemini key."}, status=503)
     session = request.app["session"]
-    market, news, reports = await _gather_brief_data(session)
+    market, news, reports, detail = await _gather_brief_data(session)
     if not (market or news):
         return web.json_response({"error": "No market or news data available right now."},
                                  status=502)
     today = datetime.now().strftime("%A, %B %d, %Y")
     prompt = (
         f"You are the chief markets strategist writing the end-of-day desk brief for {today}. "
-        "Using the live market snapshot, today's news headlines, and recent research below, "
-        "write a concise but substantive brief on what happened today.\n\n"
+        "Your job is to CONNECT THE DOTS across the data below, not just list it. Explain WHY "
+        "markets moved by tying each notable move to its likely driver in the news or research, "
+        "and cross-check what Rosenberg Research argues against what markets actually did today.\n\n"
         "Use these exact section headers, each on its own line:\n"
         "Markets: how the major assets moved today (equity indices, rates, FX, commodities, "
-        "crypto), citing the actual numbers from the snapshot, and call out the biggest movers.\n"
-        "Top stories: the 4 to 7 most important news items today, each with why it matters.\n"
-        "Research: notable calls or themes from today's research, if any (skip the header "
-        "entirely if there is none).\n"
-        "Bottom line: 2 to 3 sentences tying it together and what to watch next.\n\n"
-        "Be specific with numbers and names. Do not invent data that is not below. "
-        "Do not use em dashes anywhere; use commas or periods instead. Do not add any "
-        "preamble before the first header.\n\n"
+        "crypto), with the actual numbers. For each significant move, explain the likely driver "
+        "by pointing to a specific news item or research view below, for example 'the 10Y yield "
+        "fell 4bp, likely on the softer than expected jobs report'. Explain the moves, do not "
+        "just report them.\n"
+        "Market drivers: the 3 to 5 developments (news or data) that most moved markets today, "
+        "each with which assets or tickers they moved and in what direction.\n"
+        "Rosenberg view: what Rosenberg's latest notes actually argue, and whether today's "
+        "market action confirms or contradicts their calls. Reference their specific points and "
+        "tie them to the relevant tickers or yields. Skip this header entirely if there is no "
+        "research below.\n"
+        "Bottom line: the through-line connecting today's moves, news, and Rosenberg's views, "
+        "plus what to watch next.\n\n"
+        "Draw explicit cause-and-effect links wherever the data supports them. Be specific with "
+        "numbers, names, and tickers. Do not invent a driver you cannot ground in the data below; "
+        "if a move has no clear cause in the data, say the driver is unclear rather than guessing. "
+        "Do not use em dashes anywhere; use commas or periods instead. Do not add any preamble "
+        "before the first header.\n\n"
         f"MARKET SNAPSHOT:\n{market or 'unavailable'}\n\n"
         f"NEWS HEADLINES:\n{news or 'unavailable'}\n\n"
-        f"RECENT RESEARCH:\n{reports or 'none'}"
+        f"RECENT RESEARCH PUBLISHED:\n{reports or 'none'}\n\n"
+        f"ROSENBERG DAILY NOTES (full text, for tying their views to the tape):\n{detail or 'none'}"
     )
     text, err = await _gemini_generate(
         session, key, prompt, 3200, ("gemini-2.5-flash", "gemini-2.5-flash-lite"))
