@@ -231,6 +231,12 @@
   #db-body .rd-subhd:first-child{margin-top:0;}
   #db-body .dim{color:var(--dim);}
   #db-refresh.busy{opacity:.6;pointer-events:none;}
+  .db-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:15px;padding:64px 12px;text-align:center;}
+  .db-loading .db-spin{width:34px;height:34px;border:3px solid #4a3a15;
+    border-top-color:var(--amber);border-radius:50%;animation:ldspin .8s linear infinite;}
+  .db-loading .db-status{font-size:13.5px;color:var(--amber);letter-spacing:.02em;}
+  .db-loading .db-sub{font-size:11px;color:var(--dim);}
   #rd-body .rd-pre{font-family:var(--mono);color:#e6e6e6;font-size:13px;line-height:1.75;
     white-space:pre-wrap;margin:0 0 10px;}
   /* embedded-page fallback: load the original inside the terminal, not a new tab */
@@ -1352,11 +1358,19 @@ async function loadDaily(force){
   if(dailyLoaded && !force) return;
   const body=document.getElementById("db-body"), meta=document.getElementById("db-meta"),
         btn=document.getElementById("db-refresh");
-  btn.classList.add("busy"); meta.textContent="";
-  body.innerHTML=`<p class="dim">Reading the markets, news, and research… this takes a few seconds.</p>`;
+  btn.classList.add("busy"); btn.textContent="Generating…"; meta.textContent="";
+  const steps=["Reading the market snapshot…","Scanning today's news…",
+    "Pulling Rosenberg's latest notes…","Connecting the data…","Writing the brief…"];
+  body.innerHTML=`<div class="db-loading"><div class="db-spin"></div>`
+    +`<div class="db-status" id="db-status">${steps[0]}</div>`
+    +`<div class="db-sub">This usually takes 5 to 15 seconds.</div></div>`;
+  let si=0;
+  const tick=setInterval(()=>{ si=Math.min(si+1,steps.length-1);
+    const el=document.getElementById("db-status"); if(el)el.textContent=steps[si]; },1800);
   let d; try{ d=await(await fetch("/api/daily_brief")).json(); }
   catch(e){ d={error:"Couldn't reach the terminal."}; }
-  btn.classList.remove("busy");
+  clearInterval(tick);
+  btn.classList.remove("busy"); btn.textContent="↻ Refresh";
   if(d&&d.brief){
     dailyLoaded=true;
     meta.textContent="Generated "+(d.generated_at||"")+"  ·  Gemini";
