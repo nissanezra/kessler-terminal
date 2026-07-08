@@ -1282,6 +1282,42 @@ def _gemini_url(model):
             f"{model}:generateContent")
 
 
+async def _gemini_generate(session, key, prompt, max_out, models):
+    """Call Gemini with retry + model fallback. Returns (text, error_message);
+    exactly one is non-None. thinkingBudget 0 keeps the whole budget for output."""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_out,
+                             "thinkingConfig": {"thinkingBudget": 0}},
+    }
+    hdrs = {"x-goog-api-key": key, "Content-Type": "application/json"}
+    for model in models:
+        for attempt in range(_GEMINI_TRIES):
+            try:
+                async with session.post(
+                    _gemini_url(model), headers=hdrs, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as r:
+                    data = await r.json()
+                if r.status == 200:
+                    try:
+                        txt = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    except Exception:
+                        txt = ""
+                    if txt:
+                        return txt, None
+                    break                                  # empty -> next model
+                err = (((data or {}).get("error") or {}).get("message")
+                       or f"Gemini error {r.status}")
+                if r.status not in (429, 500, 502, 503):
+                    return None, err
+            except Exception as e:
+                _ = e
+            if attempt < _GEMINI_TRIES - 1:
+                await asyncio.sleep(1.0 + attempt)
+    return None, "Gemini is busy right now. Give it a few seconds and try again."
+
+
 async def api_summarize(request):
     """Summarize the currently-open article / report text via Gemini.
 
@@ -1344,46 +1380,10 @@ async def api_summarize(request):
         )
         max_out = 1400
         models = _GEMINI_MODELS
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        # thinkingBudget 0 turns off the model's internal "thinking" (Gemini 2.5
-        # spends output tokens on it by default) so the whole budget goes to the
-        # visible summary — otherwise long summaries get truncated mid-sentence.
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_out,
-                             "thinkingConfig": {"thinkingBudget": 0}},
-    }
-    hdrs = {"x-goog-api-key": key, "Content-Type": "application/json"}
-    last_err = "Couldn't summarize this one."
-    # Try each model with one retry, so a transient "high demand" blip on the
-    # primary model doesn't fail the summary.
-    for model in models:
-        for attempt in range(_GEMINI_TRIES):
-            try:
-                async with request.app["session"].post(
-                    _gemini_url(model), headers=hdrs, json=payload,
-                    timeout=aiohttp.ClientTimeout(total=45),
-                ) as r:
-                    data = await r.json()
-                if r.status == 200:
-                    try:
-                        summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    except Exception:
-                        summary = ""
-                    if summary:
-                        return web.json_response({"summary": summary})
-                    last_err = "Gemini returned an empty summary."
-                    break                                  # empty -> try next model, don't retry
-                last_err = (((data or {}).get("error") or {}).get("message")
-                            or f"Gemini error {r.status}")
-                if r.status not in (429, 500, 502, 503):
-                    return web.json_response({"error": last_err}, status=502)
-            except Exception as e:
-                last_err = f"Couldn't reach Gemini: {e}"
-            if attempt < _GEMINI_TRIES - 1:
-                await asyncio.sleep(1.0 + attempt)         # 1s, 2s backoff between tries
-    return web.json_response(
-        {"error": "Gemini is busy right now. Give it a few seconds and tap Summarize again."},
-        status=502)
+    text, err = await _gemini_generate(request.app["session"], key, prompt, max_out, models)
+    if err:
+        return web.json_response({"error": err}, status=502)
+    return web.json_response({"summary": text})
 
 
 async def api_set_gemini(request):
@@ -1403,6 +1403,82 @@ async def api_set_gemini(request):
     except Exception as e:
         return web.json_response({"error": f"Couldn't save the key: {e}"}, status=500)
     return web.json_response({"ok": True})
+
+
+# ---- Daily Brief: Gemini reads the monitor + news + research -> what happened today
+def _fmt_market_snapshot():
+    lines = []
+    for sec in build_monitor()["sections"]:
+        rows = [f"{r['label']} {r['price']} {r['chg']} ({r['pct']})"
+                for r in sec["rows"] if r.get("price") not in ("--", "", None)]
+        if rows:
+            lines.append(f"[{sec['title']}] " + "; ".join(rows))
+    return "\n".join(lines)
+
+
+async def _gather_brief_data(session):
+    market = _fmt_market_snapshot()
+    heads = []
+    try:
+        for s in await td.fetch_news_dashboard(session, per=8):
+            for it in s["items"]:
+                heads.append(f"- {it['title']} ({it.get('source', '')})")
+    except Exception:
+        pass
+    news = "\n".join(heads[:60])
+    # Rosenberg reports from roughly the last 2 days (today's desk research)
+    reports, cutoff = [], (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    try:
+        titles = json.loads((RESEARCH_DIR / ".rr_titles.json").read_text(encoding="utf-8"))
+    except Exception:
+        titles = {}
+    if RESEARCH_DIR.exists():
+        for p in sorted(RESEARCH_DIR.glob("rr_*.pdf")):
+            dm = re.search(r"(\d{4}-\d{2}-\d{2})", p.stem)
+            d = dm.group(1) if dm else ""
+            if d and d >= cutoff:
+                reports.append(f"- {_clean_report_title(titles.get(p.name) or p.stem)} ({d})")
+    return market, news, "\n".join(reports[:20])
+
+
+async def api_daily_brief(request):
+    """Gemini reads the live monitor, today's news, and recent research and writes a
+    concise what-happened-today desk brief."""
+    key = _gemini_key()
+    if not key:
+        return web.json_response(
+            {"error": "AI isn't set up on this terminal yet. Open a report and tap "
+                      "Summarize once to add your Gemini key."}, status=503)
+    session = request.app["session"]
+    market, news, reports = await _gather_brief_data(session)
+    if not (market or news):
+        return web.json_response({"error": "No market or news data available right now."},
+                                 status=502)
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    prompt = (
+        f"You are the chief markets strategist writing the end-of-day desk brief for {today}. "
+        "Using the live market snapshot, today's news headlines, and recent research below, "
+        "write a concise but substantive brief on what happened today.\n\n"
+        "Use these exact section headers, each on its own line:\n"
+        "Markets: how the major assets moved today (equity indices, rates, FX, commodities, "
+        "crypto), citing the actual numbers from the snapshot, and call out the biggest movers.\n"
+        "Top stories: the 4 to 7 most important news items today, each with why it matters.\n"
+        "Research: notable calls or themes from today's research, if any (skip the header "
+        "entirely if there is none).\n"
+        "Bottom line: 2 to 3 sentences tying it together and what to watch next.\n\n"
+        "Be specific with numbers and names. Do not invent data that is not below. "
+        "Do not use em dashes anywhere; use commas or periods instead. Do not add any "
+        "preamble before the first header.\n\n"
+        f"MARKET SNAPSHOT:\n{market or 'unavailable'}\n\n"
+        f"NEWS HEADLINES:\n{news or 'unavailable'}\n\n"
+        f"RECENT RESEARCH:\n{reports or 'none'}"
+    )
+    text, err = await _gemini_generate(
+        session, key, prompt, 3200, ("gemini-2.5-flash", "gemini-2.5-flash-lite"))
+    if err:
+        return web.json_response({"error": err}, status=502)
+    return web.json_response(
+        {"brief": text, "generated_at": datetime.now().strftime("%b %d, %Y  %I:%M %p")})
 
 
 # Hosts we refuse to proxy — the embed endpoint fetches arbitrary URLs, so keep it from
@@ -1892,6 +1968,7 @@ def make_app():
     app.router.add_get("/api/research/raw", api_research_raw)
     app.router.add_get("/api/article", api_article)
     app.router.add_post("/api/summarize", api_summarize)
+    app.router.add_get("/api/daily_brief", api_daily_brief)
     app.router.add_post("/api/set_gemini", api_set_gemini)
     app.router.add_get("/api/embed", api_embed)
     app.router.add_static("/static/", HERE / "static")

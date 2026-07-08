@@ -218,6 +218,19 @@
   #rd-summary .gk-row input{flex:1;min-width:200px;background:#000;border:1px solid var(--amber);
     color:var(--white);font-family:var(--mono);font-size:13px;padding:5px 8px;border-radius:3px;}
   #rd-summary .gk-row .btn{white-space:nowrap;}
+  /* Daily Brief view */
+  #dailyview{padding:8px 12px;max-width:900px;}
+  #db-title{color:var(--amber);font-weight:700;font-size:20px;line-height:1.3;margin:6px 0;}
+  #db-meta{color:var(--blue);font-size:12px;margin-bottom:14px;}
+  #db-body{color:#e6e6e6;line-height:1.65;font-size:14px;}
+  #db-body p{margin:0 0 11px;}
+  #db-body ul{margin:5px 0 12px;padding-left:20px;}
+  #db-body li{margin:0 0 6px;}
+  #db-body .rd-subhd{color:var(--amber);font-weight:700;font-size:12.5px;letter-spacing:.05em;
+    text-transform:uppercase;margin:17px 0 8px;border-bottom:1px solid #4a3a15;padding-bottom:4px;}
+  #db-body .rd-subhd:first-child{margin-top:0;}
+  #db-body .dim{color:var(--dim);}
+  #db-refresh.busy{opacity:.6;pointer-events:none;}
   #rd-body .rd-pre{font-family:var(--mono);color:#e6e6e6;font-size:13px;line-height:1.75;
     white-space:pre-wrap;margin:0 0 10px;}
   /* embedded-page fallback: load the original inside the terminal, not a new tab */
@@ -282,6 +295,10 @@
     #rd-summary .rd-sumhd{color:#111!important;}
     #rd-summary .rd-sumbody,#rd-summary .rd-sumbody p,#rd-summary .rd-sumbody li{color:#111!important;}
     #rd-summary .rd-sumbody .rd-subhd{color:#111!important;}
+    #dailyview{max-width:100%!important;}
+    #db-title{color:#111!important;} #db-meta{color:#555!important;}
+    #db-body,#db-body p,#db-body li{color:#111!important;}
+    #db-body .rd-subhd{color:#111!important;border-color:#999!important;}
   }
   /* ---- mobile / iPhone home-screen web app ---- */
   @media(max-width:820px){
@@ -344,6 +361,7 @@
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
       <button class="navbtn" onclick="showNews(null)">NEWS</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
+      <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
     </div>
     <span class="clock" id="clock"></span>
   </div>
@@ -431,6 +449,16 @@
     <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
       <span class="ctitle">RESEARCH</span></div>
     <div class="news" id="rs-list"></div>
+  </div>
+
+  <div id="dailyview" class="view">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" id="db-refresh" onclick="loadDaily(true)">↻ Refresh</button>
+      <button class="btn" onclick="window.print()">🖨 Print</button>
+      <span class="ctitle" style="margin-left:auto">DAILY BRIEF</span></div>
+    <div id="db-title">✦ Daily Brief</div>
+    <div id="db-meta"></div>
+    <div id="db-body"></div>
   </div>
 
   <div id="readerview" class="view">
@@ -1315,6 +1343,27 @@ async function saveGeminiKey(){
   }catch(e){ d={error:"Couldn't save."}; }
   if(d&&d.ok){ msg.textContent="Saved. Summarizing…"; doSummarize(); }
   else { msg.textContent=(d&&d.error)||"Couldn't save the key."; }
+}
+
+/* ---- Daily Brief: Gemini reads monitor + news + research ---- */
+let dailyLoaded=false;
+function showDaily(){ show("dailyview"); if(!dailyLoaded) loadDaily(false); }
+async function loadDaily(force){
+  if(dailyLoaded && !force) return;
+  const body=document.getElementById("db-body"), meta=document.getElementById("db-meta"),
+        btn=document.getElementById("db-refresh");
+  btn.classList.add("busy"); meta.textContent="";
+  body.innerHTML=`<p class="dim">Reading the markets, news, and research… this takes a few seconds.</p>`;
+  let d; try{ d=await(await fetch("/api/daily_brief")).json(); }
+  catch(e){ d={error:"Couldn't reach the terminal."}; }
+  btn.classList.remove("busy");
+  if(d&&d.brief){
+    dailyLoaded=true;
+    meta.textContent="Generated "+(d.generated_at||"")+"  ·  Gemini";
+    body.innerHTML=fmtSummary(d.brief);
+  } else {
+    body.innerHTML=`<p class="dim">${esc((d&&d.error)||"Couldn't build the brief right now.")}</p>`;
+  }
 }
 
 /* ---------------- research (saved reports + public feeds, read like the news) ---------------- */
