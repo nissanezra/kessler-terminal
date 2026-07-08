@@ -1131,8 +1131,11 @@ async def api_research_read(request):
     """Extract one report's text for the in-app reader."""
     name = request.query.get("file", "")
     p = RESEARCH_DIR / name
-    if (not name or "/" in name or "\\" in name or ".." in name
-            or not p.is_file() or p.suffix.lower() not in _RESEARCH_EXT):
+    # Block path traversal via separators / parent-dir escape, but DON'T reject a
+    # literal ".." inside a filename (e.g. a title ending in "..."), which is valid.
+    safe = bool(name) and "/" not in name and "\\" not in name \
+        and p.resolve().parent == RESEARCH_DIR.resolve()
+    if (not safe or not p.is_file() or p.suffix.lower() not in _RESEARCH_EXT):
         return web.json_response({"title": name, "paragraphs": [], "error": "not found"}, status=404)
     try:
         if p.suffix.lower() == ".pdf":
