@@ -210,6 +210,9 @@
   #rd-summary .rd-sumbody ul{margin:4px 0 4px;padding-left:18px;}
   #rd-summary .rd-sumbody li{margin:0 0 5px;}
   #rd-summary .rd-sumbody .dim{color:var(--dim);}
+  #rd-summary .rd-sumbody .rd-subhd{color:var(--amber);font-weight:700;font-size:11.5px;
+    letter-spacing:.04em;text-transform:uppercase;margin:11px 0 5px;}
+  #rd-summary .rd-sumbody .rd-subhd:first-child{margin-top:0;}
   #rd-sum-btn.busy{opacity:.6;pointer-events:none;}
   #rd-summary .gk-row{display:flex;gap:6px;margin:8px 0 6px;flex-wrap:wrap;}
   #rd-summary .gk-row input{flex:1;min-width:200px;background:#000;border:1px solid var(--amber);
@@ -278,6 +281,7 @@
     #rd-summary .rd-sumbox{border-color:#111!important;background:#f4f1ea!important;}
     #rd-summary .rd-sumhd{color:#111!important;}
     #rd-summary .rd-sumbody,#rd-summary .rd-sumbody p,#rd-summary .rd-sumbody li{color:#111!important;}
+    #rd-summary .rd-sumbody .rd-subhd{color:#111!important;}
   }
   /* ---- mobile / iPhone home-screen web app ---- */
   @media(max-width:820px){
@@ -1230,16 +1234,27 @@ function resetSummary(){
   const btn=document.getElementById("rd-sum-btn");
   if(btn){ btn.classList.remove("busy"); btn.textContent="✦ Summarize"; }
 }
-/* Turn Gemini's markdown-ish reply into safe HTML: bullet runs -> <ul>, else <p>. */
+/* Turn Gemini's markdown-ish reply into safe HTML: section headers -> subhead,
+   bullet runs -> <ul>, everything else -> <p>. */
+const _SUM_HEADS=/^(thesis|key points|key takeaways|markets and positioning|positioning|risks and caveats|risks|bottom line|overview|summary)\b/i;
 function fmtSummary(txt){
   const lines=String(txt||"").split(/\r?\n/); let out="", ul=false;
   const strip=s=>esc(s.replace(/\*\*(.+?)\*\*/g,"$1").replace(/^#+\s*/,"").trim());
+  const closeUl=()=>{ if(ul){out+="</ul>";ul=false;} };
   for(let raw of lines){
     const line=raw.trim();
-    if(!line){ if(ul){out+="</ul>";ul=false;} continue; }
-    const m=line.match(/^([-*•]|\d+[.)])\s+(.*)$/);
-    if(m){ if(!ul){out+="<ul>";ul=true;} out+=`<li>${strip(m[2])}</li>`; }
-    else { if(ul){out+="</ul>";ul=false;} out+=`<p>${strip(line)}</p>`; }
+    if(!line){ closeUl(); continue; }
+    const m=line.match(/^([-*•]|\d+[.)])\s+(.*)$/);          // bullet / numbered
+    if(m){ if(!ul){out+="<ul>";ul=true;} out+=`<li>${strip(m[2])}</li>`; continue; }
+    const bare=line.replace(/^\*\*(.+?)\*\*$/,"$1").replace(/\*\*/g,"");
+    const h=bare.match(/^([A-Z][A-Za-z /&]{1,26}):\s*(.*)$/);  // "Header: ..."
+    if(h && (_SUM_HEADS.test(h[1]) || h[2].trim()==="")){      // report section header
+      closeUl();
+      out+=`<div class="rd-subhd">${esc(h[1].trim())}</div>`;
+      if(h[2].trim()) out+=`<p>${strip(h[2])}</p>`;
+      continue;
+    }
+    closeUl(); out+=`<p>${strip(line)}</p>`;
   }
   if(ul)out+="</ul>";
   return out||`<p>${esc(String(txt||"").trim())}</p>`;

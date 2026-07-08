@@ -1248,28 +1248,58 @@ async def api_summarize(request):
     if len(text) < 200:
         return web.json_response(
             {"error": "Not enough text to summarize."}, status=400)
-    text = text[:30000]                                   # keep the request fast/cheap
-    prompt = (
-        "You are a sharp financial-markets analyst. Summarize the "
-        f"{'report' if body.get('kind') == 'report' else 'article'} below for a "
-        "busy reader who wants the gist fast.\n\n"
-        "Format:\n"
-        "- One short overview sentence.\n"
-        "- Then 3 to 6 bullet points of the key takeaways.\n"
-        "Keep specific numbers, names, and dates. Be concise and neutral. "
-        "Do not use em dashes anywhere; use commas or periods instead. "
-        "Do not add any preamble, title, or closing remark.\n\n"
-        f"TITLE: {title}\n\nTEXT:\n{text}"
-    )
+    is_report = body.get("kind") == "report"
+    if is_report:
+        # Research reports are long and dense — feed much more in, let it write a
+        # proper briefing, and prefer the stronger model (reports are read rarely,
+        # so quota isn't a concern). flash-lite stays as the fallback.
+        text = text[:90000]
+        prompt = (
+            "You are a senior markets strategist briefing a portfolio manager who "
+            "will not read the full research report below but needs its full "
+            "substance. Write a thorough, structured briefing.\n\n"
+            "Use these exact section headers, each on its own line:\n"
+            "Thesis: 1 to 2 sentences on the core argument or call.\n"
+            "Key points: 6 to 10 bullets covering the main arguments and evidence, "
+            "with the specific data, numbers, price levels, and dates the report "
+            "cites.\n"
+            "Markets and positioning: what it implies for rates, equities, credit, "
+            "FX, or commodities, plus any specific trades or positioning the report "
+            "mentions.\n"
+            "Risks and caveats: what the author flags as risks or what could go "
+            "wrong.\n"
+            "Bottom line: 1 to 2 sentences with the actionable takeaway.\n\n"
+            "Be substantive and specific, not vague. Preserve every important "
+            "figure. Do not use em dashes anywhere; use commas or periods instead. "
+            "Do not add any preamble before the first header.\n\n"
+            f"TITLE: {title}\n\nREPORT:\n{text}"
+        )
+        max_out = 2600
+        models = ("gemini-2.5-flash", "gemini-2.5-flash-lite")
+    else:
+        text = text[:30000]
+        prompt = (
+            "You are a sharp financial-markets analyst. Summarize the article "
+            "below for a busy reader who wants the gist fast.\n\n"
+            "Format:\n"
+            "- One short overview sentence.\n"
+            "- Then 3 to 6 bullet points of the key takeaways.\n"
+            "Keep specific numbers, names, and dates. Be concise and neutral. "
+            "Do not use em dashes anywhere; use commas or periods instead. "
+            "Do not add any preamble, title, or closing remark.\n\n"
+            f"TITLE: {title}\n\nTEXT:\n{text}"
+        )
+        max_out = 900
+        models = _GEMINI_MODELS
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 900},
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": max_out},
     }
     hdrs = {"x-goog-api-key": key, "Content-Type": "application/json"}
     last_err = "Couldn't summarize this one."
     # Try each model with one retry, so a transient "high demand" blip on the
     # primary model doesn't fail the summary.
-    for model in _GEMINI_MODELS:
+    for model in models:
         for attempt in range(_GEMINI_TRIES):
             try:
                 async with request.app["session"].post(
