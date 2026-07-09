@@ -126,6 +126,9 @@ async def api_ws(request):
     """Live monitor stream: full snapshot on connect, then changed rows are pushed."""
     ws = web.WebSocketResponse(heartbeat=30)
     await ws.prepare(request)
+    if os.environ.get("MKT_PASSWORD"):     # security: log the active-monitor device too
+        _record_seen(request.cookies.get("kkt_name"),
+                     _client_ip(request), request.headers.get("User-Agent", ""))
     request.app["ws_clients"].add(ws)
     try:
         await ws.send_json({"type": "full", **build_monitor()})
@@ -1746,32 +1749,47 @@ async def api_portfolio(request):
     })
 
 
-# --- "last seen" tracker: record when each named device (Robert / Ezra) opens the
-# shared app, so we can answer "did Robert use it today". Stored on the Fly volume so
-# it survives redeploys. Named devices carry ?u=<name> (auto-login) or a kkt_name cookie.
+# --- access / "last seen" tracker (security): record EVERY authenticated device that
+# opens the shared app, so we can spot anyone who isn't Robert or Ezra. Each distinct
+# device (name + browser) is one entry with its IPs, first/last seen, and hit count.
+# Stored on the Fly volume so it survives redeploys.
 SEEN_FILE = RESEARCH_DIR / ".last_seen.json"
 _seen_lastwrite = {}
 
 
-def _record_seen(name):
-    name = (name or "").strip()[:40]
-    if not name:
-        return
+def _client_ip(request):
+    return ((request.headers.get("Fly-Client-IP")
+             or request.headers.get("X-Forwarded-For", "").split(",")[0]
+             or (request.remote or "")).strip())[:60]
+
+
+def _record_seen(name, ip="", ua=""):
+    name = (name or "unknown").strip()[:40] or "unknown"
+    ua = (ua or "")[:200]
+    key = hashlib.sha1((name + "|" + ua).encode()).hexdigest()[:12]
     now = datetime.now(timezone.utc)
-    last = _seen_lastwrite.get(name)
+    last = _seen_lastwrite.get(key)
     if last and (now - last).total_seconds() < 60:     # throttle rapid reloads
         return
-    _seen_lastwrite[name] = now
+    _seen_lastwrite[key] = now
     try:
         RESEARCH_DIR.mkdir(exist_ok=True)
         try:
             d = json.loads(SEEN_FILE.read_text())
         except Exception:
             d = {}
-        rec = d.get(name) or {}
+        dev = d.get("devices") or {}
+        rec = dev.get(key) or {"name": name, "ua": ua, "first": now.isoformat(), "ips": []}
+        rec["name"] = name
         rec["last"] = now.isoformat()
-        rec["opens"] = int(rec.get("opens", 0)) + 1
-        d[name] = rec
+        rec["hits"] = int(rec.get("hits", 0)) + 1
+        if ip and ip not in rec["ips"]:
+            rec["ips"] = ([ip] + rec["ips"])[:6]
+        dev[key] = rec
+        if len(dev) > 80:                              # cap; keep most recent
+            dev = dict(sorted(dev.items(), key=lambda kv: kv[1].get("last", ""),
+                              reverse=True)[:80])
+        d["devices"] = dev
         SEEN_FILE.write_text(json.dumps(d))
     except Exception:
         pass
@@ -1874,9 +1892,11 @@ async def index(request):
         "true" if os.environ.get("MKT_NO_PORT") else "false")
     # per-device greeting: ?u=<name> sets & remembers it, else the saved cookie, else env/file
     who = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
-    # record the open only for a NAMED device (explicit ?u= or saved cookie), not the env default
-    if os.environ.get("MKT_PASSWORD"):     # cloud app only
-        _record_seen(request.query.get("u") or request.cookies.get("kkt_name"))
+    # security: on the gated cloud app, log every authenticated open (name if known,
+    # else "unknown") with its browser + IP, so any device that isn't Robert/Ezra shows up
+    if os.environ.get("MKT_PASSWORD"):
+        _record_seen(request.query.get("u") or request.cookies.get("kkt_name"),
+                     _client_ip(request), request.headers.get("User-Agent", ""))
     page = page.replace("{{GREETING_NAME}}", html.escape(who or "", quote=True)) \
                .replace("{{APP_CONFIG}}", cfg)
     resp = web.Response(text=page, content_type="text/html")
