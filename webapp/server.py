@@ -1746,6 +1746,45 @@ async def api_portfolio(request):
     })
 
 
+# --- "last seen" tracker: record when each named device (Robert / Ezra) opens the
+# shared app, so we can answer "did Robert use it today". Stored on the Fly volume so
+# it survives redeploys. Named devices carry ?u=<name> (auto-login) or a kkt_name cookie.
+SEEN_FILE = RESEARCH_DIR / ".last_seen.json"
+_seen_lastwrite = {}
+
+
+def _record_seen(name):
+    name = (name or "").strip()[:40]
+    if not name:
+        return
+    now = datetime.now(timezone.utc)
+    last = _seen_lastwrite.get(name)
+    if last and (now - last).total_seconds() < 60:     # throttle rapid reloads
+        return
+    _seen_lastwrite[name] = now
+    try:
+        RESEARCH_DIR.mkdir(exist_ok=True)
+        try:
+            d = json.loads(SEEN_FILE.read_text())
+        except Exception:
+            d = {}
+        rec = d.get(name) or {}
+        rec["last"] = now.isoformat()
+        rec["opens"] = int(rec.get("opens", 0)) + 1
+        d[name] = rec
+        SEEN_FILE.write_text(json.dumps(d))
+    except Exception:
+        pass
+
+
+async def api_last_seen(request):
+    try:
+        d = json.loads(SEEN_FILE.read_text())
+    except Exception:
+        d = {}
+    return web.json_response(d)
+
+
 def _greeting_name():
     """Whom to greet on the splash. Per-install (never shipped via the updater):
     env MKT_USER, else a local webapp/greeting.txt, else no name."""
@@ -1835,6 +1874,9 @@ async def index(request):
         "true" if os.environ.get("MKT_NO_PORT") else "false")
     # per-device greeting: ?u=<name> sets & remembers it, else the saved cookie, else env/file
     who = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
+    # record the open only for a NAMED device (explicit ?u= or saved cookie), not the env default
+    if os.environ.get("MKT_PASSWORD"):     # cloud app only
+        _record_seen(request.query.get("u") or request.cookies.get("kkt_name"))
     page = page.replace("{{GREETING_NAME}}", html.escape(who or "", quote=True)) \
                .replace("{{APP_CONFIG}}", cfg)
     resp = web.Response(text=page, content_type="text/html")
@@ -1994,6 +2036,7 @@ def make_app():
     app.router.add_get("/api/article", api_article)
     app.router.add_post("/api/summarize", api_summarize)
     app.router.add_get("/api/daily_brief", api_daily_brief)
+    app.router.add_get("/api/last_seen", api_last_seen)
     app.router.add_post("/api/set_gemini", api_set_gemini)
     app.router.add_get("/api/embed", api_embed)
     app.router.add_static("/static/", HERE / "static")
