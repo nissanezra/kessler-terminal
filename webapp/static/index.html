@@ -72,7 +72,15 @@
     padding:0 16px;cursor:pointer;}
   #cmd-go:hover{background:#ffc63e;border-color:#ffc63e;}
   #cmd-go:active{transform:translateY(1px);}
-  #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;justify-self:end;}
+  #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;}
+  #titlebar .tb-right{display:flex;align-items:center;gap:14px;justify-self:end;min-width:0;}
+  .mkt-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
+    letter-spacing:.05em;white-space:nowrap;}
+  .mkt-status .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .mkt-status.open{color:var(--green);}
+  .mkt-status.open .dot{background:var(--green);box-shadow:0 0 6px var(--green);}
+  .mkt-status.closed{color:var(--red);}
+  .mkt-status.closed .dot{background:var(--red);}
   .navbtn{color:var(--amber);background:transparent;border:1px solid #4a3a15;
     padding:4px 14px;cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;
     letter-spacing:.06em;white-space:nowrap;transition:background .12s,color .12s;}
@@ -314,7 +322,9 @@
     #titlebar .tb-left{flex:1 1 100%;flex-wrap:wrap;gap:6px 10px;}
     #titlebar .name{font-size:12px;}
     #titlebar .navgroup{flex:1 1 100%;justify-content:center;justify-self:auto;}
-    #titlebar .clock{font-size:11px;margin-left:auto;justify-self:auto;}
+    #titlebar .clock{font-size:11px;}
+    #titlebar .tb-right{margin-left:auto;justify-self:auto;gap:10px;}
+    .mkt-status{font-size:10px;}
     #cmdwrap{order:5;flex:1 1 100%;}
     #cmd{padding:10px;font-size:15px;}
     #cmd-go{padding:0 20px;font-size:14px;}
@@ -369,7 +379,10 @@
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
     </div>
-    <span class="clock" id="clock"></span>
+    <div class="tb-right">
+      <span class="mkt-status" id="mkt-status"></span>
+      <span class="clock" id="clock"></span>
+    </div>
   </div>
 
   <div id="loadbadge" class="loadbadge"><span class="spin"></span><span id="loadbadge-txt"></span></div>
@@ -498,7 +511,29 @@ let lastRaw={};
 function clock(){const d=new Date();
   document.getElementById("clock").textContent=
     d.toLocaleDateString("en-US",{weekday:"short",day:"2-digit",month:"short",year:"numeric"})
-    +"  "+d.toLocaleTimeString("en-US",{hour12:false});}
+    +"  "+d.toLocaleTimeString("en-US",{hour12:false});
+  updateMkt();}
+/* US equity market open/closed (NYSE regular session, 9:30-16:00 ET, Mon-Fri, minus holidays) */
+const MKT_HOLIDAYS=new Set([
+  "2026-01-01","2026-01-19","2026-02-16","2026-04-03","2026-05-25","2026-06-19",
+  "2026-07-03","2026-09-07","2026-11-26","2026-12-25",
+  "2027-01-01","2027-01-18","2027-02-15","2027-03-26","2027-05-31","2027-06-18",
+  "2027-07-05","2027-09-06","2027-11-25","2027-12-24"]);
+function marketOpen(){
+  const p={}; new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour12:false,
+    weekday:"short",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})
+    .formatToParts(new Date()).forEach(x=>p[x.type]=x.value);
+  if(p.weekday==="Sat"||p.weekday==="Sun")return false;
+  if(MKT_HOLIDAYS.has(`${p.year}-${p.month}-${p.day}`))return false;
+  const mins=(+p.hour%24)*60+(+p.minute);
+  return mins>=570 && mins<960;   // 9:30 AM to 4:00 PM ET
+}
+function updateMkt(){
+  const el=document.getElementById("mkt-status"); if(!el)return;
+  const open=marketOpen();
+  el.className="mkt-status "+(open?"open":"closed");
+  el.innerHTML='<span class="dot"></span>'+(open?"MARKET OPEN":"MARKET CLOSED");
+}
 setInterval(clock,1000);clock();
 
 /* launch splash: fade out once the monitor first renders (min ~900ms, 6s fallback) */
