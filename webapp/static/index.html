@@ -561,6 +561,9 @@ function showMonitor(){show("monitor");}
 /* ---------------- monitor (live WebSocket stream + polling fallback) ---------------- */
 function renderMonitor(data){
   const mon=document.getElementById("monitor");
+  // preserve the reader's scroll position: a full innerHTML rebuild (on WS reconnect
+  // or the polling fallback) would otherwise snap the page back to the top mid-scroll
+  const keepScroll=mon.classList.contains("active")?window.scrollY:0;
   mon.style.gridTemplateColumns=`repeat(${data.ncols},1fr)`;
   const cols={}; for(let i=0;i<data.ncols;i++)cols[i]=[];
   data.sections.forEach(s=>cols[s.col].push(s));
@@ -576,6 +579,7 @@ function renderMonitor(data){
       html+="</div>";});
     html+="</div>";}
   mon.innerHTML=html;
+  if(keepScroll)window.scrollTo(0,keepScroll);   // restore position after the rebuild
   hideSplash();
   mon.querySelectorAll(".price").forEach(el=>{const k=el.dataset.k,raw=parseFloat(el.dataset.raw);
     if(k in lastRaw&&!isNaN(raw)&&raw!==lastRaw[k]){const cl=raw>lastRaw[k]?"flash-up":"flash-down";
