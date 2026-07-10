@@ -1096,6 +1096,7 @@ ROSENBERG_SECTIONS = [
     ("strategy", "Rosenberg · Market Strategy"), ("strategizer", "Rosenberg · Strategizer"),
     ("special", "Rosenberg · Special Reports"), ("webcasts", "Rosenberg · Webcasts"),
     ("chartroom", "Rosenberg · Investor Chartroom"),
+    ("models", "Rosenberg · Proprietary Models"),
 ]
 
 
