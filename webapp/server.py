@@ -519,26 +519,31 @@ async def _bmo_insights_section(days=BMO_INSIGHTS_DAYS, limit=50):
     return {"name": f"BMO INSIGHTS · LAST {days} DAYS", "items": items}
 
 
-# ---- Mauldin Economics (Wix site, no RSS; per-publication sitemap chunks) ----
-# Free macro letters only: Thoughts from the Frontline (weekly) + Global Macro
-# Update. Pages are server-rendered, so they open in the in-app reader.
-MAULDIN_SITEMAP = "https://www.mauldineconomics.com/sitemap.xml"
-MAULDIN_PUBS = [                      # sitemap-chunk marker -> author tag
-    ("dynamic-frontlinethoughts", "Thoughts from the Frontline"),
-    ("dynamic-global-macro-update", "Global Macro Update"),
+# ---- Wix-hosted letters (no RSS; per-publication sitemap chunks) ----
+# Free letters only. Pages are server-rendered, so they open in the in-app reader.
+# Each site: sitemap index URL + (sitemap-chunk marker -> author tag) pairs.
+WIX_LETTER_SITES = [
+    {"name": "Mauldin Economics",
+     "sitemap": "https://www.mauldineconomics.com/sitemap.xml",
+     "pubs": [("dynamic-frontlinethoughts", "Thoughts from the Frontline"),
+              ("dynamic-global-macro-update", "Global Macro Update")],
+     "limit": 10},
+    {"name": "Jared Dillian Money",
+     "sitemap": "https://www.jareddillianmoney.com/sitemap.xml",
+     "pubs": [("dynamic-weekly", "The Weekly Letter")],
+     "limit": 10},
 ]
-MAULDIN_LIMIT = 10
 
 
-async def _mauldin_section():
-    """Latest Mauldin Economics letters, merged across publications, newest first."""
+async def _wix_letters_section(site):
+    """Latest letters from one Wix site, merged across publications, newest first."""
     rows = []
     try:
         async with aiohttp.ClientSession(max_line_size=65536, max_field_size=65536) as s:
-            async with s.get(MAULDIN_SITEMAP, headers=td.UA,
+            async with s.get(site["sitemap"], headers=td.UA,
                              timeout=aiohttp.ClientTimeout(total=15)) as r:
                 chunks = re.findall(r"<loc>([^<]+)</loc>", await r.text())
-            for frag, tag in MAULDIN_PUBS:
+            for frag, tag in site["pubs"]:
                 url = next((c for c in chunks if frag in c), None)
                 if not url:
                     continue
@@ -555,7 +560,7 @@ async def _mauldin_section():
     rows.sort(reverse=True)                        # ISO dates — string sort is fine
     now = datetime.now(timezone.utc)
     items = []
-    for lastmod, loc, tag in rows[:MAULDIN_LIMIT]:
+    for lastmod, loc, tag in rows[:site["limit"]]:
         try:
             dt = datetime.fromisoformat(lastmod.replace("Z", "+00:00"))
             if not dt.tzinfo:
@@ -569,7 +574,7 @@ async def _mauldin_section():
                       "meta": meta, "author": tag})
     if not items:
         return None
-    return {"name": "Mauldin Economics", "items": items}
+    return {"name": site["name"], "items": items}
 
 
 # ---- Tracked people: news / interviews / articles (Google News queries) ----
@@ -1152,7 +1157,7 @@ async def api_research(request):
         econ_tasks = [_econ_group_section(econ, g) for g in ECON_GROUPS]
         tasks = []
         tasks += [_research_feed(session, f) for f in RESEARCH_FEEDS]
-        tasks.append(_mauldin_section())             # Mauldin letters (sitemap, no RSS)
+        tasks += [_wix_letters_section(s) for s in WIX_LETTER_SITES]  # Mauldin, Dillian (sitemap, no RSS)
         tasks += [_person_section(session, n, q) for n, q in PERSON_FEEDS]
         tasks.append(_econ_releases_section(econ))   # CPI/jobs/JOLTS/ADP/... via FRED
         tasks += econ_tasks[:2]                      # FEDERAL RESERVE, U.S. DATA & BUDGET
