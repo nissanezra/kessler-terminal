@@ -248,6 +248,8 @@ ROSENBERG_FEEDS = [
      "features": ["1507dad1-6f8e-4f63-a728-45e224ddcd1d"], "time": "Past", "keep": 4},
     {"code": "chartroom", "name": "Investor Chartroom",
      "bucket": "08dcb189-d662-4057-8339-e3fd5575a943", "features": [], "keep": 4},
+    {"code": "models", "name": "Proprietary Models",
+     "bucket": "08dcb18a-09c6-4761-8021-0282eed31fb3", "features": [], "keep": 6},
 ]
 
 
