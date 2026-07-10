@@ -105,6 +105,18 @@ def _ensure_deps():
                            timeout=120)
         except Exception as e:
             print(f"  update: pypdf install skipped — {e}")
+    # PyMuPDF renders report pages as images so charts/tables show in the reader
+    # (not just extracted text). If it won't install, the reader falls back to text.
+    try:
+        import fitz  # noqa: F401  (PyMuPDF)
+    except Exception:
+        print("  update: installing PDF chart renderer (pymupdf)…")
+        try:
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pymupdf"],
+                           timeout=180)
+        except Exception as e:
+            print(f"  update: pymupdf install skipped — {e}")
     # Web terminal: a native window on Windows needs pywebview (Edge WebView2).
     # Best-effort — if it won't install, the web app just opens in the browser.
     if os.name == "nt":
