@@ -84,7 +84,7 @@ SECTIONS = [
     (1, "AGRICULTURE", "cnbc", [
         ("CORN", "@C.1", 2), ("WHEAT", "@W.1", 2), ("SOYBEANS", "@S.1", 2),
         ("SUGAR", "@SB.1", 2), ("COFFEE", "@KC.1", 2), ("COTTON", "@CT.1", 2),
-        ("COCOA", "@CC.1", 0),
+        ("COCOA", "@CC.1", 0), ("LUMBER", "@LBR.1", 2),
     ]),
     (1, "TREASURY YIELDS", "cnbc", [
         ("3 MONTH", "US3M", 3), ("2 YEAR", "US2Y", 3), ("3 YEAR", "US3Y", 3),
