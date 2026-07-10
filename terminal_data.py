@@ -283,11 +283,22 @@ FRED_CHART = {
     "UNEMPLOYMENT": ("UNRATE", "UNEMPLOYMENT %"), "UNRATE": ("UNRATE", "UNEMPLOYMENT %"),
     "PAYROLLS": ("PAYEMS", "NONFARM PAYROLLS MoM (k)"),
     "NFP": ("PAYEMS", "NONFARM PAYROLLS MoM (k)"), "JOBS": ("PAYEMS", "NONFARM PAYROLLS MoM (k)"),
+    # --- housing: S&P CoreLogic Case-Shiller (monthly, ~2mo lag; national since 1987) ---
+    # level chart = NSA national index; YoY variant rides the SA series so the two can
+    # carry different FRED_UNITS (units are keyed per series id, not per ticker)
+    "CASESHILLER": ("CSUSHPINSA", "CASE-SHILLER NATIONAL HOME PRICE INDEX"),
+    "CASE": ("CSUSHPINSA", "CASE-SHILLER NATIONAL HOME PRICE INDEX"),
+    "HOMES": ("CSUSHPINSA", "CASE-SHILLER NATIONAL HOME PRICE INDEX"),
+    "HPI": ("CSUSHPINSA", "CASE-SHILLER NATIONAL HOME PRICE INDEX"),
+    "CASESHILLER-YOY": ("CSUSHPISA", "CASE-SHILLER HOME PRICES YoY %"),
+    "HPI-YOY": ("CSUSHPISA", "CASE-SHILLER HOME PRICES YoY %"),
+    "HOMES-YOY": ("CSUSHPISA", "CASE-SHILLER HOME PRICES YoY %"),
+    "CS20": ("SPCS20RSA", "CASE-SHILLER 20-CITY INDEX"),
 }
 
 FRED_UNITS = {
     "CPIAUCSL": "pc1", "CPILFESL": "pc1", "PCEPI": "pc1", "PCEPILFE": "pc1",
-    "CES0500000003": "pc1", "PAYEMS": "chg",
+    "CES0500000003": "pc1", "PAYEMS": "chg", "CSUSHPISA": "pc1",
 }
 
 
