@@ -1171,6 +1171,34 @@ async def api_research(request):
     return web.json_response({"sections": sections})
 
 
+def _pdf_pages(path, max_pages=40, zoom=2.0, quality=80):
+    """Render each PDF page to a base64 JPEG data URI so charts/images (not just the
+    extracted text) show in the reader. JPEG (not PNG) keeps the payload phone-friendly
+    (~4x smaller). Returns [] if PyMuPDF isn't installed, so the caller falls back to
+    text-only (keeps the desktop build working without the dep)."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return []
+    import base64
+    out = []
+    try:
+        doc = fitz.open(str(path))
+    except Exception:
+        return []
+    mat = fitz.Matrix(zoom, zoom)
+    for i, page in enumerate(doc):
+        if i >= max_pages:
+            break
+        try:
+            jpg = page.get_pixmap(matrix=mat).tobytes("jpg", jpg_quality=quality)
+            out.append("data:image/jpeg;base64," + base64.b64encode(jpg).decode())
+        except Exception:
+            continue
+    doc.close()
+    return out
+
+
 def _pdf_paragraphs(path):
     import pypdf
     reader = pypdf.PdfReader(str(path))
@@ -1200,15 +1228,17 @@ async def api_research_read(request):
         and p.resolve().parent == RESEARCH_DIR.resolve()
     if (not safe or not p.is_file() or p.suffix.lower() not in _RESEARCH_EXT):
         return web.json_response({"title": name, "paragraphs": [], "error": "not found"}, status=404)
+    pages = []
     try:
         if p.suffix.lower() == ".pdf":
             paras = _pdf_paragraphs(p)
+            pages = await asyncio.to_thread(_pdf_pages, p)   # rendered page images (charts)
         else:
             paras = [b.strip() for b in p.read_text(encoding="utf-8", errors="replace").split("\n\n")
                      if b.strip()]
     except Exception as e:
-        return web.json_response({"title": p.stem, "paragraphs": [], "error": str(e)})
-    return web.json_response({"title": p.stem, "paragraphs": paras})
+        return web.json_response({"title": p.stem, "paragraphs": [], "pages": [], "error": str(e)})
+    return web.json_response({"title": p.stem, "paragraphs": paras, "pages": pages})
 
 
 # Auto-pulled Rosenberg report filenames look like  rr_<code>__<title>_<date>.pdf
