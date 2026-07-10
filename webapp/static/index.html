@@ -851,6 +851,7 @@ let cmpGen=0;
 async function renderCompare(){
   const gen=++cmpGen;                                  // only the latest render commits
   const entries=cmpList.slice();
+  if(entries.length)setLoading(true,entries.map(e=>e.ticker).join(" + "));
   const results=await Promise.all(entries.map(async e=>{
     try{ const url=e.tf==="CUSTOM"
         ? `/api/chart?ticker=${encodeURIComponent(e.ticker)}&from=${e.from}&to=${e.to}`
@@ -861,7 +862,8 @@ async function renderCompare(){
               lastVal:price.length?price[price.length-1].value:null, rate:!!d.rate}; }
     catch(_){ return {e, data:[]}; }
   }));
-  if(gen!==cmpGen)return;                              // superseded by a newer render
+  if(gen!==cmpGen)return;                              // superseded by a newer render (its own badge stays up)
+  setLoading(false);
   cmpDateAxis=(results.find(r=>r.dates&&r.dates.length)||{}).dates||[];
   const chart=getCmpChart();
   // fresh formatter identity each render: the tick positions (0..239) never change
