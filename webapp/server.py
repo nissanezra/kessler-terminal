@@ -1260,21 +1260,46 @@ async def api_research_read(request):
     return web.json_response({"title": p.stem, "paragraphs": paras, "page_count": page_count})
 
 
+_PAGECACHE_DIR = RESEARCH_DIR / ".pagecache"
+# Render ONE page at a time. The Fly box is 256-512MB / shared-cpu-1x; concurrent
+# PyMuPDF renders spike memory and OOM-crash the whole app (502s). This serializes
+# the heavy work; cached pages skip it entirely (just a file read).
+_PAGE_SEM = asyncio.Semaphore(1)
+
+
 async def api_research_page(request):
-    """Render one PDF page to a JPEG image, served individually (lazy-loaded by the
-    reader). Cached hard — a report's pages never change once downloaded."""
-    p = _safe_research_path(request.query.get("file", ""))
+    """Serve one PDF page as JPEG, rendered on first request and cached to disk so it
+    only renders once. Renders are serialized (semaphore) so a tiny box never OOMs."""
+    name = request.query.get("file", "")
+    p = _safe_research_path(name)
     if p is None or p.suffix.lower() != ".pdf":
         return web.Response(status=404, text="not found")
     try:
         n = int(request.query.get("n", "0"))
     except ValueError:
         n = 0
-    img = await asyncio.to_thread(_pdf_page_image, p, n)
-    if img is None:
-        return web.Response(status=404, text="no page")
-    return web.Response(body=img, content_type="image/jpeg",
-                        headers={"Cache-Control": "private, max-age=86400"})
+    hdrs = {"Cache-Control": "private, max-age=604800"}
+    cache = _PAGECACHE_DIR / f"{p.stem}__p{n}.jpg"
+    try:
+        if cache.is_file():
+            return web.Response(body=cache.read_bytes(), content_type="image/jpeg", headers=hdrs)
+    except Exception:
+        pass
+    async with _PAGE_SEM:                       # only one render in flight at a time
+        try:                                    # double-check: another request may have just cached it
+            if cache.is_file():
+                return web.Response(body=cache.read_bytes(), content_type="image/jpeg", headers=hdrs)
+        except Exception:
+            pass
+        img = await asyncio.to_thread(_pdf_page_image, p, n)
+        if img is None:
+            return web.Response(status=404, text="no page")
+        try:
+            _PAGECACHE_DIR.mkdir(exist_ok=True)
+            cache.write_bytes(img)
+        except Exception:
+            pass
+    return web.Response(body=img, content_type="image/jpeg", headers=hdrs)
 
 
 # Auto-pulled Rosenberg report filenames look like  rr_<code>__<title>_<date>.pdf
