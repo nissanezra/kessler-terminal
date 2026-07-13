@@ -87,6 +87,24 @@
     letter-spacing:.06em;white-space:nowrap;transition:background .12s,color .12s;}
   .navbtn:hover{background:var(--amber);color:#000;border-color:var(--amber);}
   .navbtn:active{transform:translateY(1px);}
+  /* investment calculator (local only) */
+  .calc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;padding:12px;}
+  .calc-card{background:#111;border:1px solid var(--hdr);border-radius:5px;padding:12px 14px;}
+  .calc-hd{color:var(--amber);font-weight:700;font-size:13px;letter-spacing:.03em;
+    border-bottom:1px solid var(--hdr);padding-bottom:7px;margin-bottom:10px;}
+  .calc-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px;}
+  .calc-row label{color:var(--dim);font-size:12px;}
+  .calc-row input,.calc-row select{background:#1a1a1a;border:1px solid #333;color:var(--price);
+    font-family:var(--mono);font-size:13px;padding:3px 7px;width:130px;text-align:right;border-radius:3px;}
+  .calc-row select{text-align:left;}
+  .calc-row input:focus,.calc-row select:focus{outline:none;border-color:var(--amber);}
+  .calc-out{margin-top:10px;border-top:1px solid var(--hdr);padding-top:9px;font-size:12.5px;}
+  .calc-out .cl{display:flex;justify-content:space-between;padding:2px 0;color:var(--price);}
+  .calc-out .cl span:first-child{color:var(--dim);}
+  .calc-out .cl b{color:var(--yellow);font-weight:700;}
+  .calc-out .cl.big b{color:var(--amber);font-size:15px;}
+  .calc-out .cl.neg b{color:var(--red);} .calc-out .cl.pos b{color:var(--green);}
+  .calc-note{color:var(--dim);font-size:10.5px;line-height:1.5;margin-top:9px;font-style:italic;}
   /* loading badge shown while a ticker's data is being fetched */
   .loadbadge{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:60;
     background:#191308;border:1px solid #4a3a15;color:var(--amber);
@@ -381,6 +399,7 @@
       <button class="navbtn" onclick="showNews(null)">NEWS</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
+      <button class="navbtn navbtn-calc" id="nav-calc" onclick="showCalc()" style="display:none">🧮 CALCULATOR</button>
     </div>
     <div class="tb-right">
       <span class="mkt-status" id="mkt-status"></span>
@@ -492,6 +511,44 @@
     <div id="rd-meta"></div>
     <div id="rd-summary"></div>
     <div id="rd-body"></div>
+  </div>
+
+  <div id="calcview" class="view">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <span class="ctitle" style="margin-left:auto">🧮 INVESTMENT CALCULATOR</span></div>
+    <div class="calc-grid">
+      <!-- Bond -->
+      <div class="calc-card">
+        <div class="calc-hd">Bond duration &amp; earnings</div>
+        <div class="calc-row"><label>Face / par ($)</label><input id="b-face" type="number" value="100000"></div>
+        <div class="calc-row"><label>Coupon rate (%)</label><input id="b-cpn" type="number" value="4.5" step="0.01"></div>
+        <div class="calc-row"><label>Years to maturity</label><input id="b-yrs" type="number" value="10" step="0.5"></div>
+        <div class="calc-row"><label>Yield to maturity (%)</label><input id="b-ytm" type="number" value="4.5" step="0.01"></div>
+        <div class="calc-row"><label>Coupons / year</label><input id="b-freq" type="number" value="2" step="1"></div>
+        <div class="calc-row"><label>Yield change (bps)</label><input id="b-dbps" type="number" value="100" step="1"></div>
+        <div class="calc-out" id="b-out"></div>
+      </div>
+      <!-- Rate futures -->
+      <div class="calc-card">
+        <div class="calc-hd">Interest-rate futures &middot; $ per basis point</div>
+        <div class="calc-row"><label>Contract</label><select id="f-con"></select></div>
+        <div class="calc-row"><label># contracts</label><input id="f-n" type="number" value="10" step="1"></div>
+        <div class="calc-row"><label>DV01 per contract ($/bp)</label><input id="f-dv01" type="number" value="65" step="1"></div>
+        <div class="calc-row"><label>Yield move (bps)</label><input id="f-bps" type="number" value="25" step="1"></div>
+        <div class="calc-out" id="f-out"></div>
+        <div class="calc-note">DV01s are approximate CTD ballparks — override per your risk system. Move up in yield = long futures lose.</div>
+      </div>
+      <!-- Margin -->
+      <div class="calc-card">
+        <div class="calc-hd">Margin &amp; leverage</div>
+        <div class="calc-row"><label>Contract</label><select id="m-con"></select></div>
+        <div class="calc-row"><label># contracts</label><input id="m-n" type="number" value="10" step="1"></div>
+        <div class="calc-row"><label>Initial margin / contract ($)</label><input id="m-im" type="number" value="1200" step="50"></div>
+        <div class="calc-row"><label>Account equity ($)</label><input id="m-eq" type="number" value="100000" step="1000"></div>
+        <div class="calc-out" id="m-out"></div>
+        <div class="calc-note">Margins are exchange-set and change often — enter your broker's current figure.</div>
+      </div>
+    </div>
   </div>
 
   <div id="addmodal" class="addmodal">
@@ -625,6 +682,8 @@ function scheduleWS(){ wsRetry=Math.min(wsRetry+1,8); setTimeout(connectWS,400*w
 loadMonitor();          // instant first paint
 connectWS();            // then live stream
 setInterval(()=>{ if((!ws||ws.readyState!==1)&&document.getElementById("monitor").classList.contains("active"))loadMonitor(); },3000);
+// Investment Calculator: local-only (Ezra's Mac). Hidden on the Fly app + Robert's build.
+if(window.LOCAL_TOOLS){ const b=document.getElementById("nav-calc"); if(b)b.style.display=""; }
 
 /* ---------------- charts ---------------- */
 function getChart(id){
@@ -1400,6 +1459,89 @@ async function saveGeminiKey(){
 /* ---- Daily Brief: Gemini reads monitor + news + research ---- */
 let dailyLoaded=false;
 function showDaily(){ show("dailyview"); if(!dailyLoaded) loadDaily(false); }
+
+/* ---------------- investment calculator (local only) ---------------- */
+// CME Treasury/rate futures: contract size, tick $, and an approximate CTD DV01 ($/bp).
+const CALC_CONTRACTS=[
+  {k:"ZT", n:"2Y Note (ZT)",  size:200000, tick:7.8125, dv01:38,  im:900},
+  {k:"ZF", n:"5Y Note (ZF)",  size:100000, tick:7.8125, dv01:43,  im:1100},
+  {k:"ZN", n:"10Y Note (ZN)", size:100000, tick:15.625, dv01:65,  im:1500},
+  {k:"TN", n:"Ultra 10Y (TN)",size:100000, tick:15.625, dv01:88,  im:2100},
+  {k:"ZB", n:"T-Bond (ZB)",   size:100000, tick:31.25,  dv01:130, im:3600},
+  {k:"UB", n:"Ultra Bond (UB)",size:100000,tick:31.25,  dv01:205, im:5400},
+  {k:"SR3",n:"SOFR 3M (SR3)",  size:2500000,tick:12.50,  dv01:25,  im:800},
+];
+const money=v=>(v<0?"-$":"$")+Math.abs(v).toLocaleString("en-US",{maximumFractionDigits:2});
+const num=id=>parseFloat(document.getElementById(id).value)||0;
+let calcInit=false;
+function showCalc(){
+  show("calcview");
+  if(!calcInit){
+    const opts=CALC_CONTRACTS.map(c=>`<option value="${c.k}">${c.n}</option>`).join("");
+    ["f-con","m-con"].forEach(id=>document.getElementById(id).innerHTML=opts);
+    document.getElementById("f-con").value="ZN"; document.getElementById("m-con").value="ZN";
+    const zn=CALC_CONTRACTS.find(x=>x.k==="ZN");   // sync derived fields to the default contract
+    document.getElementById("f-dv01").value=zn.dv01; document.getElementById("m-im").value=zn.im;
+    document.querySelectorAll("#calcview input,#calcview select").forEach(el=>{
+      el.addEventListener("input",calcAll); });
+    document.getElementById("f-con").addEventListener("change",e=>{
+      const c=CALC_CONTRACTS.find(x=>x.k===e.target.value); if(c)document.getElementById("f-dv01").value=c.dv01; calcAll(); });
+    document.getElementById("m-con").addEventListener("change",e=>{
+      const c=CALC_CONTRACTS.find(x=>x.k===e.target.value); if(c)document.getElementById("m-im").value=c.im; calcAll(); });
+    calcInit=true;
+  }
+  calcAll();
+}
+function calcAll(){ calcBond(); calcFutures(); calcMargin(); }
+const _line=(l,v,cls="")=>`<div class="cl ${cls}"><span>${l}</span><b>${v}</b></div>`;
+
+function calcBond(){
+  const face=num("b-face"), cpn=num("b-cpn")/100, yrs=num("b-yrs"),
+        ytm=num("b-ytm")/100, f=Math.max(1,num("b-freq")), dbps=num("b-dbps");
+  const nP=Math.round(yrs*f), y=ytm/f, c=face*cpn/f;
+  let price=0, wsum=0;
+  for(let t=1;t<=nP;t++){ const cf=(t===nP?c+face:c), pv=cf/Math.pow(1+y,t);
+    price+=pv; wsum+=t*pv; }
+  if(nP<=0){ document.getElementById("b-out").innerHTML=_line("Enter maturity & frequency","—"); return; }
+  const macaulay=(wsum/price)/f;               // in years
+  const modDur=macaulay/(1+y);
+  const dv01=modDur*price*0.0001;              // $ per 1bp per bond position (this face)
+  const annualCpn=face*cpn;
+  const curYield=annualCpn/price*100;
+  const dPrice=-modDur*price*(dbps/10000);     // approx price change for the bps move
+  document.getElementById("b-out").innerHTML=
+    _line("Price",money(price))
+   +_line("Current yield",curYield.toFixed(3)+"%")
+   +_line("Annual coupon income",money(annualCpn))
+   +_line("Macaulay duration",macaulay.toFixed(3)+" yrs")
+   +_line("Modified duration",modDur.toFixed(3))
+   +_line("DV01 (per 1bp)",money(dv01),"big")
+   +_line(`Price move on ${dbps>=0?"+":""}${dbps}bp`,money(dPrice),dPrice>=0?"pos":"neg");
+}
+function calcFutures(){
+  const c=CALC_CONTRACTS.find(x=>x.k===document.getElementById("f-con").value)||CALC_CONTRACTS[2];
+  const n=num("f-n"), dv01=num("f-dv01"), bps=num("f-bps");
+  const perBp=dv01*n;                          // $ per 1bp across the position
+  const pnl=-perBp*bps;                        // yield up => long futures lose
+  document.getElementById("f-out").innerHTML=
+    _line("Notional",money(c.size*n))
+   +_line("Tick value (1/32 or 1/4)",money(c.tick)+" /contract")
+   +_line("$ per 1bp (position)",money(perBp),"big")
+   +_line(`P&L if yields ${bps>=0?"+":""}${bps}bp`,money(pnl),pnl>=0?"pos":"neg")
+   +_line("(if you are SHORT, flip the sign)",money(-pnl));
+}
+function calcMargin(){
+  const c=CALC_CONTRACTS.find(x=>x.k===document.getElementById("m-con").value)||CALC_CONTRACTS[2];
+  const n=num("m-n"), im=num("m-im"), eq=num("m-eq");
+  const totIM=im*n, notional=c.size*n;
+  const lev=eq>0?notional/eq:0, use=eq>0?totIM/eq*100:0;
+  document.getElementById("m-out").innerHTML=
+    _line("Notional controlled",money(notional))
+   +_line("Total initial margin",money(totIM),"big")
+   +_line("Margin as % of equity",use.toFixed(1)+"%",use>50?"neg":"")
+   +_line("Effective leverage",lev.toFixed(1)+"x",lev>20?"neg":"")
+   +_line("Max contracts on equity",im>0?Math.floor(eq/im).toString():"—");
+}
 async function loadDaily(force){
   if(dailyLoaded && !force) return;
   const body=document.getElementById("db-body"), meta=document.getElementById("db-meta"),
@@ -1466,11 +1608,16 @@ async function openResearch(i){
   if(it.kind==="file"){
     ext.style.display="none";
     let a; try{ a=await(await fetch(`/api/research/read?file=${encodeURIComponent(it.file)}`)).json(); }catch(e){ a=null; }
-    // Prefer rendered page images (charts + layout intact); keep the extracted text
-    // stashed so Summarize still works. Fall back to text-only if no page images.
+    // Prefer rendered page images (charts + layout intact), loaded ONE AT A TIME via
+    // /api/research/page so a long report never ships megabytes in one response. Keep
+    // the extracted text stashed so Summarize still works. Fall back to text if no pages.
     readerReportText=((a&&a.paragraphs)||[]).join("\n\n");
-    if(a&&a.pages&&a.pages.length){
-      body.innerHTML=a.pages.map((src,i)=>`<img class="rd-page" src="${src}" alt="page ${i+1}" loading="lazy">`).join("");
+    if(a&&a.page_count>0){
+      const fq=encodeURIComponent(it.file);
+      let html="";
+      for(let i=0;i<a.page_count;i++)
+        html+=`<img class="rd-page" src="/api/research/page?file=${fq}&n=${i}" alt="page ${i+1}" loading="lazy">`;
+      body.innerHTML=html;
     } else {
       render((a&&a.paragraphs)||[], (a&&a.paragraphs&&a.paragraphs.length)?"":`<p class="dim">Couldn't read this file${a&&a.error?` (${esc(a.error)})`:""}.</p>`);
     }

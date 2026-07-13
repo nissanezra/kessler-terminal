@@ -1171,32 +1171,38 @@ async def api_research(request):
     return web.json_response({"sections": sections})
 
 
-def _pdf_pages(path, max_pages=40, zoom=2.0, quality=80):
-    """Render each PDF page to a base64 JPEG data URI so charts/images (not just the
-    extracted text) show in the reader. JPEG (not PNG) keeps the payload phone-friendly
-    (~4x smaller). Returns [] if PyMuPDF isn't installed, so the caller falls back to
-    text-only (keeps the desktop build working without the dep)."""
+def _pdf_page_count(path):
+    """Number of pages, or 0 if PyMuPDF is missing / the file won't open. 0 => the
+    reader falls back to text (keeps the desktop build working without the dep)."""
     try:
         import fitz  # PyMuPDF
     except Exception:
-        return []
-    import base64
-    out = []
+        return 0
     try:
         doc = fitz.open(str(path))
+        n = doc.page_count
+        doc.close()
+        return n
     except Exception:
-        return []
-    mat = fitz.Matrix(zoom, zoom)
-    for i, page in enumerate(doc):
-        if i >= max_pages:
-            break
-        try:
-            jpg = page.get_pixmap(matrix=mat).tobytes("jpg", jpg_quality=quality)
-            out.append("data:image/jpeg;base64," + base64.b64encode(jpg).decode())
-        except Exception:
-            continue
-    doc.close()
-    return out
+        return 0
+
+
+def _pdf_page_image(path, n, zoom=2.0, quality=80):
+    """Render ONE page to JPEG bytes (served individually so the reader loads pages
+    lazily instead of shipping a whole report as one huge JSON blob). None on failure."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return None
+    try:
+        doc = fitz.open(str(path))
+        if n < 0 or n >= doc.page_count:
+            doc.close(); return None
+        jpg = doc[n].get_pixmap(matrix=fitz.Matrix(zoom, zoom)).tobytes("jpg", jpg_quality=quality)
+        doc.close()
+        return jpg
+    except Exception:
+        return None
 
 
 def _pdf_paragraphs(path):
@@ -1218,27 +1224,57 @@ def _pdf_paragraphs(path):
     return [x for x in paras if len(x.strip(".•·–—- ")) > 1]
 
 
-async def api_research_read(request):
-    """Extract one report's text for the in-app reader."""
-    name = request.query.get("file", "")
+def _safe_research_path(name):
+    """Resolve a research filename to a Path inside RESEARCH_DIR, or None if unsafe.
+    Blocks path traversal via separators / parent-dir escape, but allows a literal
+    ".." inside a filename (e.g. a title ending in "...") and "--" (auto-pull titles)."""
+    if not name or "/" in name or "\\" in name:
+        return None
     p = RESEARCH_DIR / name
-    # Block path traversal via separators / parent-dir escape, but DON'T reject a
-    # literal ".." inside a filename (e.g. a title ending in "..."), which is valid.
-    safe = bool(name) and "/" not in name and "\\" not in name \
-        and p.resolve().parent == RESEARCH_DIR.resolve()
-    if (not safe or not p.is_file() or p.suffix.lower() not in _RESEARCH_EXT):
-        return web.json_response({"title": name, "paragraphs": [], "error": "not found"}, status=404)
-    pages = []
+    if p.resolve().parent != RESEARCH_DIR.resolve() or not p.is_file() \
+       or p.suffix.lower() not in _RESEARCH_EXT:
+        return None
+    return p
+
+
+async def api_research_read(request):
+    """One report's text + page count for the reader. Text is used for Summarize and
+    as the fallback view; PDF page IMAGES are fetched one at a time via /api/research/page
+    so a long report doesn't ship megabytes of base64 in a single response (was timing
+    out on phones for 20+ page daily notes)."""
+    name = request.query.get("file", "")
+    p = _safe_research_path(name)
+    if p is None:
+        return web.json_response({"title": name, "paragraphs": [], "page_count": 0,
+                                  "error": "not found"}, status=404)
+    page_count = 0
     try:
         if p.suffix.lower() == ".pdf":
             paras = _pdf_paragraphs(p)
-            pages = await asyncio.to_thread(_pdf_pages, p)   # rendered page images (charts)
+            page_count = await asyncio.to_thread(_pdf_page_count, p)
         else:
             paras = [b.strip() for b in p.read_text(encoding="utf-8", errors="replace").split("\n\n")
                      if b.strip()]
     except Exception as e:
-        return web.json_response({"title": p.stem, "paragraphs": [], "pages": [], "error": str(e)})
-    return web.json_response({"title": p.stem, "paragraphs": paras, "pages": pages})
+        return web.json_response({"title": p.stem, "paragraphs": [], "page_count": 0, "error": str(e)})
+    return web.json_response({"title": p.stem, "paragraphs": paras, "page_count": page_count})
+
+
+async def api_research_page(request):
+    """Render one PDF page to a JPEG image, served individually (lazy-loaded by the
+    reader). Cached hard — a report's pages never change once downloaded."""
+    p = _safe_research_path(request.query.get("file", ""))
+    if p is None or p.suffix.lower() != ".pdf":
+        return web.Response(status=404, text="not found")
+    try:
+        n = int(request.query.get("n", "0"))
+    except ValueError:
+        n = 0
+    img = await asyncio.to_thread(_pdf_page_image, p, n)
+    if img is None:
+        return web.Response(status=404, text="no page")
+    return web.Response(body=img, content_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=86400"})
 
 
 # Auto-pulled Rosenberg report filenames look like  rr_<code>__<title>_<date>.pdf
@@ -1923,9 +1959,16 @@ async def auth_mw(request, handler):
 
 async def index(request):
     page = (HERE / "static" / "index.html").read_text(encoding="utf-8")
-    # tell the frontend whether the portfolio (PORT) view is disabled in this deploy
-    cfg = "<script>window.NO_PORT=%s;</script>" % (
-        "true" if os.environ.get("MKT_NO_PORT") else "false")
+    # tell the frontend whether the portfolio (PORT) view is disabled in this deploy,
+    # and whether local-only tools (Investment Calculator) are enabled. Local tools are
+    # ON only on Ezra's Mac (Darwin) — Fly is Linux, Robert's build is Windows — so the
+    # button never shows on the shared app or Robert's terminal. Env can force it.
+    import platform
+    local_tools = (os.environ.get("MKT_LOCAL_TOOLS") == "1"
+                   or (platform.system() == "Darwin" and not os.environ.get("MKT_PASSWORD")))
+    cfg = "<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;</script>" % (
+        "true" if os.environ.get("MKT_NO_PORT") else "false",
+        "true" if local_tools else "false")
     # per-device greeting: ?u=<name> sets & remembers it, else the saved cookie, else env/file
     who = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
     # security: on the gated cloud app, log every authenticated open (name if known,
@@ -2087,6 +2130,7 @@ def make_app():
     app.router.add_get("/api/news_board", api_news_board)
     app.router.add_get("/api/research", api_research)
     app.router.add_get("/api/research/read", api_research_read)
+    app.router.add_get("/api/research/page", api_research_page)
     app.router.add_get("/api/research/manifest", api_research_manifest)
     app.router.add_get("/api/research/raw", api_research_raw)
     app.router.add_get("/api/article", api_article)
