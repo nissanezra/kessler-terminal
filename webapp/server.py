@@ -1171,6 +1171,11 @@ async def api_research(request):
     return web.json_response({"sections": sections})
 
 
+# Report filename prefixes rendered as page IMAGES (charts/tables intact). Everything
+# else reads as text — cheaper (no server-side render) and better for long letters.
+_IMAGE_REPORT_PREFIXES = ("rr_models__", "rr_chartroom__")
+
+
 def _pdf_page_count(path):
     """Number of pages, or 0 if PyMuPDF is missing / the file won't open. 0 => the
     reader falls back to text (keeps the desktop build working without the dep)."""
@@ -1251,7 +1256,11 @@ async def api_research_read(request):
     try:
         if p.suffix.lower() == ".pdf":
             paras = _pdf_paragraphs(p)
-            page_count = await asyncio.to_thread(_pdf_page_count, p)
+            # Only chart/table-heavy reports (Proprietary Models, Investor Chartroom)
+            # render as page IMAGES; every other report reads as TEXT — lighter to load
+            # and keeps the Fly box small (server-side PDF rendering is memory-heavy).
+            if name.startswith(_IMAGE_REPORT_PREFIXES):
+                page_count = await asyncio.to_thread(_pdf_page_count, p)
         else:
             paras = [b.strip() for b in p.read_text(encoding="utf-8", errors="replace").split("\n\n")
                      if b.strip()]
@@ -1272,8 +1281,8 @@ async def api_research_page(request):
     only renders once. Renders are serialized (semaphore) so a tiny box never OOMs."""
     name = request.query.get("file", "")
     p = _safe_research_path(name)
-    if p is None or p.suffix.lower() != ".pdf":
-        return web.Response(status=404, text="not found")
+    if p is None or p.suffix.lower() != ".pdf" or not name.startswith(_IMAGE_REPORT_PREFIXES):
+        return web.Response(status=404, text="not found")   # only chart reports render
     try:
         n = int(request.query.get("n", "0"))
     except ValueError:
