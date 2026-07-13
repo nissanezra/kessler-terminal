@@ -1171,9 +1171,20 @@ async def api_research(request):
     return web.json_response({"sections": sections})
 
 
-# Report filename prefixes rendered as page IMAGES (charts/tables intact). Everything
-# else reads as text — cheaper (no server-side render) and better for long letters.
+# Report filename prefixes rendered as page IMAGES (charts/tables intact) on the shared
+# cloud app. Everything else there reads as text — cheaper (no server-side render) and
+# fine for long letters, keeping the memory-limited Fly box small.
 _IMAGE_REPORT_PREFIXES = ("rr_models__", "rr_chartroom__")
+
+
+def _renders_as_images(name):
+    """Which reports render as page images. On the shared cloud app (MKT_PASSWORD set,
+    memory-limited) only chart-heavy reports do; on a LOCAL terminal (Ezra's Mac /
+    Robert's Windows build — real computers, no memory worry) ALL reports render as
+    images, keeping the original full-fidelity format."""
+    if os.environ.get("MKT_PASSWORD"):          # shared cloud Fly app
+        return name.startswith(_IMAGE_REPORT_PREFIXES)
+    return True                                 # local build: everything as images
 
 
 def _pdf_page_count(path):
@@ -1256,10 +1267,9 @@ async def api_research_read(request):
     try:
         if p.suffix.lower() == ".pdf":
             paras = _pdf_paragraphs(p)
-            # Only chart/table-heavy reports (Proprietary Models, Investor Chartroom)
-            # render as page IMAGES; every other report reads as TEXT — lighter to load
-            # and keeps the Fly box small (server-side PDF rendering is memory-heavy).
-            if name.startswith(_IMAGE_REPORT_PREFIXES):
+            # Cloud app: only chart-heavy reports render as images (rest text, keeps the
+            # Fly box small). Local terminals render everything as images (original format).
+            if _renders_as_images(name):
                 page_count = await asyncio.to_thread(_pdf_page_count, p)
         else:
             paras = [b.strip() for b in p.read_text(encoding="utf-8", errors="replace").split("\n\n")
@@ -1281,8 +1291,8 @@ async def api_research_page(request):
     only renders once. Renders are serialized (semaphore) so a tiny box never OOMs."""
     name = request.query.get("file", "")
     p = _safe_research_path(name)
-    if p is None or p.suffix.lower() != ".pdf" or not name.startswith(_IMAGE_REPORT_PREFIXES):
-        return web.Response(status=404, text="not found")   # only chart reports render
+    if p is None or p.suffix.lower() != ".pdf" or not _renders_as_images(name):
+        return web.Response(status=404, text="not found")   # cloud: only chart reports render
     try:
         n = int(request.query.get("n", "0"))
     except ValueError:
