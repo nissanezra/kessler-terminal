@@ -1505,6 +1505,91 @@ async def api_summarize(request):
     return web.json_response({"summary": text})
 
 
+async def _ticker_ai_context(session, ticker):
+    """A compact, factual digest of a ticker (live quote + fundamentals + price-history
+    peaks/lows with dates) so Gemini answers from REAL terminal data, not guesses."""
+    lines = [f"Symbol: {ticker.upper()}"]
+    try:
+        fund = await td.fetch_fundamentals(session, ticker)
+    except Exception:
+        fund = None
+    if fund:
+        for k, v in fund.items():
+            if k.startswith("_") or v in (None, ""):
+                continue
+            lines.append(f"{k}: {v}")
+    # Price-history digest (close-based). StockAnalysis caps stocks at ~10y; indices go
+    # further. Label the window so the model doesn't call a 10y high an all-time high.
+    try:
+        bars = await td.fetch_history(session, ticker, tf="ALL")
+    except Exception:
+        bars = None
+    rows = [(b.get("t"), b.get("c")) for b in (bars or []) if b.get("t") and b.get("c") is not None]
+    if rows:
+        d0, d1 = rows[0][0], rows[-1][0]
+        cur_d, cur_c = rows[-1]
+        hi_d, hi_c = max(rows, key=lambda r: r[1])
+        lo_d, lo_c = min(rows, key=lambda r: r[1])
+        lines.append(f"Price history available: {d0} to {d1} (daily closes)")
+        lines.append(f"Latest close: {cur_c} on {cur_d}")
+        lines.append(f"Highest close in window: {hi_c} on {hi_d}")
+        lines.append(f"Lowest close in window: {lo_c} on {lo_d}")
+        # last 52 weeks
+        try:
+            cutoff = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            yr = [r for r in rows if r[0] >= cutoff]
+            if yr:
+                yh = max(yr, key=lambda r: r[1]); yl = min(yr, key=lambda r: r[1])
+                lines.append(f"52-week high close: {yh[1]} on {yh[0]}; low: {yl[1]} on {yl[0]}")
+        except Exception:
+            pass
+        # highest close per calendar year (peaks over time)
+        by_year = {}
+        for d, c in rows:
+            y = d[:4]
+            if y not in by_year or c > by_year[y][1]:
+                by_year[y] = (d, c)
+        if len(by_year) > 1:
+            yrs = "; ".join(f"{y}: {by_year[y][1]} ({by_year[y][0]})"
+                            for y in sorted(by_year))
+            lines.append(f"Yearly high close by year: {yrs}")
+    return "\n".join(lines)
+
+
+async def api_ask_ticker(request):
+    """Free-form Q&A about a ticker via Gemini, grounded in the terminal's live data."""
+    key = _gemini_key()
+    if not key:
+        return web.json_response(
+            {"error": "AI isn't set up on this terminal yet. Open a report and tap "
+                      "Summarize once to add your Gemini key."}, status=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ticker = (body.get("ticker") or "").strip()
+    question = (body.get("question") or "").strip()
+    if not ticker or len(question) < 2:
+        return web.json_response({"error": "Ask a question about the ticker."}, status=400)
+    context = await _ticker_ai_context(request.app["session"], ticker)
+    prompt = (
+        "You are a precise financial-markets analyst answering a question about a specific "
+        "security inside a trading terminal. Use the LIVE DATA below for anything factual or "
+        "numeric (current price, dates, highs, lows, peaks, ranges); it comes from the "
+        "terminal and is authoritative. The price history is limited to the window shown, so "
+        "if the question needs data outside that window, say so plainly instead of guessing. "
+        "You may add brief general context from your own knowledge, but keep it clearly "
+        "separate and note that it may be out of date. Do NOT give personalized investment "
+        "advice or buy and sell recommendations. Do not use em dashes; use commas or periods. "
+        "Be concise, specific, and answer the actual question.\n\n"
+        f"LIVE DATA for {ticker.upper()}:\n{context}\n\nQUESTION: {question}"
+    )
+    text, err = await _gemini_generate(request.app["session"], key, prompt, 1200, _GEMINI_MODELS)
+    if err:
+        return web.json_response({"error": err}, status=502)
+    return web.json_response({"answer": text})
+
+
 async def api_set_gemini(request):
     """Store a Gemini API key on THIS terminal (desktop builds) so summaries work
     without touching the repo. No-op on the cloud app, where the env secret wins."""
@@ -2179,6 +2264,7 @@ def make_app():
     app.router.add_get("/api/research/raw", api_research_raw)
     app.router.add_get("/api/article", api_article)
     app.router.add_post("/api/summarize", api_summarize)
+    app.router.add_post("/api/ask_ticker", api_ask_ticker)
     app.router.add_get("/api/daily_brief", api_daily_brief)
     app.router.add_get("/api/last_seen", api_last_seen)
     app.router.add_post("/api/set_gemini", api_set_gemini)
