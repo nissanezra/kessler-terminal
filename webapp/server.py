@@ -1543,16 +1543,19 @@ async def _ticker_ai_context(session, ticker):
                 lines.append(f"52-week high close: {yh[1]} on {yh[0]}; low: {yl[1]} on {yl[0]}")
         except Exception:
             pass
-        # highest close per calendar year (peaks over time)
-        by_year = {}
+        # highest AND lowest close per calendar year (peaks and troughs over time)
+        hi_year, lo_year = {}, {}
         for d, c in rows:
             y = d[:4]
-            if y not in by_year or c > by_year[y][1]:
-                by_year[y] = (d, c)
-        if len(by_year) > 1:
-            yrs = "; ".join(f"{y}: {by_year[y][1]} ({by_year[y][0]})"
-                            for y in sorted(by_year))
-            lines.append(f"Yearly high close by year: {yrs}")
+            if y not in hi_year or c > hi_year[y][1]:
+                hi_year[y] = (d, c)
+            if y not in lo_year or c < lo_year[y][1]:
+                lo_year[y] = (d, c)
+        if len(hi_year) > 1:
+            yrs = "; ".join(
+                f"{y}: high {hi_year[y][1]} ({hi_year[y][0]}), low {lo_year[y][1]} ({lo_year[y][0]})"
+                for y in sorted(hi_year))
+            lines.append(f"Yearly high and low close by year: {yrs}")
     return "\n".join(lines)
 
 
