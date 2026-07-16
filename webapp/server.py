@@ -127,7 +127,7 @@ async def api_ws(request):
     ws = web.WebSocketResponse(heartbeat=30)
     await ws.prepare(request)
     if os.environ.get("MKT_PASSWORD"):     # security: log the active-monitor device too
-        _record_seen(request.cookies.get("kkt_name"),
+        _record_seen(request.cookies.get("kkt_dev"), request.cookies.get("kkt_name"),
                      _client_ip(request), request.headers.get("User-Agent", ""))
     request.app["ws_clients"].add(ws)
     try:
@@ -1967,10 +1967,24 @@ def _client_ip(request):
              or (request.remote or "")).strip())[:60]
 
 
-def _record_seen(name, ip="", ua=""):
+def _et_today():
+    """Today's date in US Eastern (users are ET). tzdata may be absent in the image, so
+    fall back to a fixed EDT offset — good enough for a per-day usage counter."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    except Exception:
+        return (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%d")
+
+
+def _record_seen(dev_id, name, ip="", ua=""):
+    """Log a device open, keyed on a stable per-device cookie (dev_id) so each physical
+    phone gets its OWN row — no more merging two identical iPhones. Keeps a per-day open
+    count and a sticky name (once a device logs in as Robert/Ezra it stays that, even if
+    later opened in plain Safari where the name cookie isn't sent)."""
     name = (name or "unknown").strip()[:40] or "unknown"
     ua = (ua or "")[:200]
-    key = hashlib.sha1((name + "|" + ua).encode()).hexdigest()[:12]
+    key = (dev_id or ("anon-" + hashlib.sha1(ua.encode()).hexdigest()[:8]))[:40]
     now = datetime.now(timezone.utc)
     last = _seen_lastwrite.get(key)
     if last and (now - last).total_seconds() < 60:     # throttle rapid reloads
@@ -1983,10 +1997,19 @@ def _record_seen(name, ip="", ua=""):
         except Exception:
             d = {}
         dev = d.get("devices") or {}
-        rec = dev.get(key) or {"name": name, "ua": ua, "first": now.isoformat(), "ips": []}
-        rec["name"] = name
+        rec = dev.get(key) or {"name": name, "ua": ua, "first": now.isoformat(),
+                               "ips": [], "days": {}}
+        if name != "unknown" or not rec.get("name"):   # sticky: don't blank a known name
+            rec["name"] = name
+        rec["ua"] = ua
         rec["last"] = now.isoformat()
         rec["hits"] = int(rec.get("hits", 0)) + 1
+        days = rec.get("days") or {}
+        today = _et_today()
+        days[today] = int(days.get(today, 0)) + 1
+        if len(days) > 60:                             # keep ~2 months of daily counts
+            days = dict(sorted(days.items())[-60:])
+        rec["days"] = days
         if ip and ip not in rec["ips"]:
             rec["ips"] = ([ip] + rec["ips"])[:6]
         dev[key] = rec
@@ -2103,14 +2126,18 @@ async def index(request):
         "true" if local_tools else "false")
     # per-device greeting: ?u=<name> sets & remembers it, else the saved cookie, else env/file
     who = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
-    # security: on the gated cloud app, log every authenticated open (name if known,
-    # else "unknown") with its browser + IP, so any device that isn't Robert/Ezra shows up
+    # security: on the gated cloud app, log every authenticated open under a stable
+    # per-device cookie (name if known, else "unknown") with its browser + IP, so each
+    # physical device shows up separately and any device that isn't Robert/Ezra stands out
+    dev_id = request.cookies.get("kkt_dev") or os.urandom(6).hex()
     if os.environ.get("MKT_PASSWORD"):
-        _record_seen(request.query.get("u") or request.cookies.get("kkt_name"),
+        _record_seen(dev_id, request.query.get("u") or request.cookies.get("kkt_name"),
                      _client_ip(request), request.headers.get("User-Agent", ""))
     page = page.replace("{{GREETING_NAME}}", html.escape(who or "", quote=True)) \
                .replace("{{APP_CONFIG}}", cfg)
     resp = web.Response(text=page, content_type="text/html")
+    if not request.cookies.get("kkt_dev"):             # first visit: mint a device id
+        resp.set_cookie("kkt_dev", dev_id, max_age=_COOKIE_MAXAGE, samesite="Lax")
     if request.query.get("u"):
         resp.set_cookie("kkt_name", request.query.get("u"),
                         max_age=_COOKIE_MAXAGE, samesite="Lax")
