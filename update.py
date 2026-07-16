@@ -1,11 +1,17 @@
 """Self-updater for Kessler Terminal.
 
-Runs (by the launcher) BEFORE the app starts. Checks the public repo for a newer
-code version and, if found, downloads the updated code files into this folder.
+Runs (by the launcher) BEFORE the app starts. Checks the repo for a newer code
+version and, if found, downloads the updated code files into this folder.
 It only ever writes the bare filenames listed in version.json — it never touches
 local data (portfolio.json, .fred_key, transactions.json) or anything outside
 this folder. Fails silent/offline-safe: if the check fails, the app just runs
 the code it already has.
+
+PRIVATE-REPO SUPPORT: if a `.gh_token` file sits next to this script, the updater
+sends it as a read-only GitHub token and fetches through the authenticated Contents
+API (raw.githubusercontent.com does not serve private repos, even with a token).
+With no token it falls back to the public raw CDN, so the same file works whether
+the repo is public or private.
 """
 import json
 import os
@@ -14,10 +20,11 @@ import sys
 import urllib.request
 
 REPO = "nissanezra/kessler-terminal"
+API = f"https://api.github.com/repos/{REPO}"
 RAW_MAIN = f"https://raw.githubusercontent.com/{REPO}/main/"
-API_COMMIT = f"https://api.github.com/repos/{REPO}/commits/main"
 HERE = os.path.dirname(os.path.abspath(__file__))
 VFILE = os.path.join(HERE, ".appversion")
+TOKENFILE = os.path.join(HERE, ".gh_token")   # local, private; dotfile so _safe never touches it
 
 
 def _ctx():
@@ -28,8 +35,21 @@ def _ctx():
         return ssl.create_default_context()
 
 
-def _get(url, timeout=12):
-    req = urllib.request.Request(url, headers={"User-Agent": "kessler-terminal-updater"})
+def _token():
+    try:
+        return open(TOKENFILE).read().strip()
+    except Exception:
+        return ""
+
+
+def _req(url, accept=None, timeout=12):
+    hdrs = {"User-Agent": "kessler-terminal-updater"}
+    tok = _token()
+    if tok:
+        hdrs["Authorization"] = "Bearer " + tok
+    if accept:
+        hdrs["Accept"] = accept
+    req = urllib.request.Request(url, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as r:
         return r.read()
 
@@ -41,21 +61,26 @@ def _local_version():
         return 0
 
 
-def _resolve_base():
-    """Freshness-safe base URL for fetching repo files.
-
-    GitHub's raw CDN caches the branch HEAD for ~5 min, so a just-pushed update
-    can keep looking 'up to date' for several minutes (raw ignores cache-busting
-    query strings and no-cache headers). Resolve the current commit SHA via the
-    API and pin raw URLs to it — SHA URLs are immutable, so they're never stale.
-    Falls back to the (possibly cached) branch URL if the API is unreachable."""
+def _resolve_ref():
+    """Current commit SHA (immutable, so it dodges the raw CDN's ~5-min HEAD cache).
+    Works on public or private repos (the token, if present, is sent). Falls back to
+    the 'main' branch ref if the API is unreachable."""
     try:
-        sha = json.loads(_get(API_COMMIT)).get("sha")
+        sha = json.loads(_req(f"{API}/commits/main")).get("sha")
         if sha:
-            return f"https://raw.githubusercontent.com/{REPO}/{sha}/"
+            return sha
     except Exception as e:
         print(f"  update: SHA resolve failed, using branch — {e}")
-    return RAW_MAIN
+    return "main"
+
+
+def _fetch(path, ref):
+    """Raw bytes of one repo file. Private (token present): Contents API with the raw
+    media type. Public (no token): raw CDN pinned to the SHA."""
+    if _token():
+        return _req(f"{API}/contents/{path}?ref={ref}", accept="application/vnd.github.raw")
+    base = RAW_MAIN if ref == "main" else f"https://raw.githubusercontent.com/{REPO}/{ref}/"
+    return _req(base + path)
 
 
 def _ensure_wezterm_config():
@@ -152,11 +177,11 @@ def main():
     _ensure_wezterm_config()                 # every launch: keep the render config in place
     _ensure_deps()
     _ensure_greeting()
-    base = _resolve_base()                    # SHA-pinned when possible, never stale
+    ref = _resolve_ref()                      # SHA-pinned when possible, never stale
     try:
-        manifest = json.loads(_get(base + "version.json"))
+        manifest = json.loads(_fetch("version.json", ref))
     except Exception as e:
-        print(f"  update: skipped (offline?) — {e}")
+        print(f"  update: skipped (offline / no access?) — {e}")
         return
     remote = int(manifest.get("version", 0))
     local = _local_version()
@@ -189,7 +214,7 @@ def main():
     for fn in targets:
         dst = os.path.join(HERE, *fn.split("/"))
         try:
-            data = _get(base + "/".join(fn.split("/")))
+            data = _fetch("/".join(fn.split("/")), ref)
             os.makedirs(os.path.dirname(dst) or HERE, exist_ok=True)
             tmp = dst + ".new"
             with open(tmp, "wb") as f:
