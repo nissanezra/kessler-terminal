@@ -2227,10 +2227,16 @@ async def index(request):
     # "Share with X" target = the OTHER person (Robert<->Ezra); else generic "team"
     _w = (who or "").strip().lower()
     share_to = "Ezra" if _w == "robert" else "Robert" if _w == "ezra" else "team"
-    cfg = "<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;</script>" % (
+    # Native PDF viewer for reports: ON for local builds (Robert's Windows / Ezra's Mac —
+    # their webview renders the ORIGINAL PDF natively), OFF on the cloud/phone app where
+    # iOS won't embed a PDF reliably (there it keeps page-image rendering).
+    native_pdf = not os.environ.get("MKT_PASSWORD")
+    cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
+           "window.NATIVE_PDF=%s;</script>") % (
         "true" if os.environ.get("MKT_NO_PORT") else "false",
         "true" if local_tools else "false",
-        json.dumps(share_to))
+        json.dumps(share_to),
+        "true" if native_pdf else "false")
     # security: on the gated cloud app, log every authenticated open under a stable
     # per-device cookie (name if known, else "unknown") with its browser + IP, so each
     # physical device shows up separately and any device that isn't Robert/Ezra stands out

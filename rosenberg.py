@@ -358,47 +358,6 @@ def _save_titles(titles):
         pass
 
 
-def _export_originals(titles, quiet=False):
-    """Windows only (Robert): mirror the downloaded report PDFs into a friendly
-    'Rosenberg Reports' folder on the Desktop, organized by section with readable
-    names, so the ORIGINAL files can be opened/printed outside the terminal."""
-    if os.name != "nt":
-        return
-    import shutil, re as _re
-    section_names = {f["code"]: f["name"] for f in ROSENBERG_FEEDS}
-    home = os.path.expanduser("~")
-    desktop = os.path.join(home, "Desktop")
-    outroot = os.path.join(desktop if os.path.isdir(desktop) else home, "Rosenberg Reports")
-    n = 0
-    try:
-        files = os.listdir(RESEARCH_DIR)
-    except Exception:
-        return
-    for fn in files:
-        if not fn.startswith("rr_") or not fn.lower().endswith(".pdf"):
-            continue
-        m = _re.match(r"rr_([a-z]+)__", fn)
-        code = m.group(1) if m else ""
-        section = section_names.get(code, "Reports")
-        dm = _re.search(r"(\d{4}-\d{2}-\d{2})", fn)
-        date = dm.group(1) if dm else ""
-        title = titles.get(fn) or fn[len(f"rr_{code}__"):-4].replace("_", " ")
-        title = _re.sub(r'[<>:"/\\|?*]', " ", title).strip()[:120]
-        outname = (title + (f" {date}" if date and date not in title else "") + ".pdf").strip()
-        outdir = os.path.join(outroot, section)
-        dst = os.path.join(outdir, outname)
-        if os.path.exists(dst):
-            continue
-        try:
-            os.makedirs(outdir, exist_ok=True)
-            shutil.copy2(os.path.join(RESEARCH_DIR, fn), dst)
-            n += 1
-        except Exception:
-            pass
-    if n and not quiet:
-        print(f"  rosenberg: exported {n} original PDF(s) to Desktop\\Rosenberg Reports")
-
-
 def sync(token=None, quiet=False):
     """Download the newest reports from every Rosenberg section not already saved.
     Filenames are prefixed `rr_<code>__` so the terminal groups them by section.
@@ -437,7 +396,6 @@ def sync(token=None, quiet=False):
             except Exception as e:
                 say(f"    x {p['title'][:44]} — {e}")
     _save_titles(titles)
-    _export_originals(titles, quiet=quiet)           # Windows: copy originals to the Desktop
     say(f"  rosenberg: {got} new report(s) downloaded" if got
         else "  rosenberg: up to date")
     return got
