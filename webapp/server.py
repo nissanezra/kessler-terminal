@@ -86,6 +86,20 @@ def _mirror_cfg():
         return None
 
 
+# Commodity futures -> (ETF proxy for CHART data, display name). Clicking one opens
+# the commodity's OWN page (live futures quote from CNBC) and charts via the ETF,
+# clearly labeled — futures have a live quote but no free chart source.
+COMMODITY_PROXY = {
+    "@CL.1": ("USO", "Crude Oil WTI"), "@BZ.1": ("BNO", "Brent Crude"),
+    "@NG.1": ("UNG", "Natural Gas"), "@RB.1": ("UGA", "Gasoline (RBOB)"),
+    "@GC.1": ("GLD", "Gold"), "@SI.1": ("SLV", "Silver"),
+    "@PL.1": ("PPLT", "Platinum"), "@PA.1": ("PALL", "Palladium"),
+    "@HG.1": ("CPER", "Copper"), "@C.1": ("CORN", "Corn"),
+    "@W.1": ("WEAT", "Wheat"), "@S.1": ("SOYB", "Soybeans"),
+    "@SB.1": ("CANE", "Sugar"),
+}
+
+
 def build_monitor():
     """Current monitor state, mirroring dashboard.render()'s layout."""
     ncols = max(c for c, *_ in dash.SECTIONS) + 1
@@ -111,7 +125,9 @@ def build_monitor():
                 "key": title + "|" + q.label,
                 "label": q.label, "price": price, "raw": q.price, "chg": chg,
                 "pct": pct, "time": q.tdisp, "up": up,
-                "cmd": dash._click_cmd(r[1], prov),
+                # commodities open their OWN page (real futures ticker + quote, chart via
+                # ETF proxy) instead of silently opening the proxy ETF's chart.
+                "cmd": (r[1] if r[1] in COMMODITY_PROXY else dash._click_cmd(r[1], prov)),
             })
         if out_rows:
             sections.append({"col": col, "title": title, "rows": out_rows})
@@ -196,12 +212,15 @@ async def api_chart(request):
     s = request.app["session"]
     ticker = request.query.get("ticker", "AAPL").upper()
     tf = request.query.get("tf", "1Y")
+    # Commodity futures have no free chart source, so chart their ETF proxy (labeled).
+    proxy = COMMODITY_PROXY.get(ticker)
+    fetch_sym = proxy[0] if proxy else ticker
     frm, to = request.query.get("from"), request.query.get("to")
     if frm and to:                      # custom date range
         tf = "CUSTOM"
-        bars = await td.fetch_history(s, ticker, custom=(frm, to)) or []
+        bars = await td.fetch_history(s, fetch_sym, custom=(frm, to)) or []
     else:
-        bars = await td.fetch_history(s, ticker, tf) or []
+        bars = await td.fetch_history(s, fetch_sym, tf) or []
     bars = [b for b in bars if b.get("t") and b.get("c") is not None]
     # Intraday (1D) bars carry clock-time labels ("4:00 AM"); the browser chart
     # needs numeric UNIX timestamps. Stamp them onto today's date (UTC epoch so the
@@ -227,7 +246,7 @@ async def api_chart(request):
             d0 = datetime.fromisoformat(str(bars[0]["t"])[:10])
             wfrom = (d0 - timedelta(days=365)).strftime("%Y-%m-%d")
             wto = (d0 - timedelta(days=1)).strftime("%Y-%m-%d")
-            wb = await td.fetch_history(s, ticker, custom=(wfrom, wto)) or []
+            wb = await td.fetch_history(s, fetch_sym, custom=(wfrom, wto)) or []
             warmup = [b["c"] for b in wb if b.get("c") is not None]
         except Exception:
             warmup = []
@@ -266,10 +285,12 @@ async def api_chart(request):
     return web.json_response({
         "ticker": ticker, "tf": tf,
         "price": price, "sma50": sma50, "sma100": sma100, "sma200": sma200,
-        "rsi": rsi, "display": idx[2] if idx else ticker,
+        "rsi": rsi, "display": (proxy[1] if proxy else (idx[2] if idx else ticker)),
         # FRED series (rates/yields/spreads/econ) are levels, not tradeable prices,
         # so the compare legend shows % only (no dollar value) for them.
         "rate": bool(td.resolve_fred(ticker)),
+        # commodity charted via an ETF proxy: tell the frontend so it can label it
+        "proxy": ({"etf": proxy[0], "name": proxy[1]} if proxy else None),
     })
 
 
@@ -285,19 +306,25 @@ async def api_security(request):
     """Ticker detail: header quote, fundamentals grid, and P/E history."""
     ticker = request.query.get("ticker", "AAPL").upper()
     s = request.app["session"]
-    fund = await td.fetch_fundamentals(s, ticker)
+    fund = await td.fetch_fundamentals(s, ticker)          # CNBC quote works for @GC.1 etc.
+    prox = COMMODITY_PROXY.get(ticker)
     idx = td.resolve_index(ticker)
-    if idx:
+    pe, pe_label, etf_holdings = [], "P/E (yr-end)", None
+    if prox:
+        pe_label = ""                                     # commodities have no P/E
+    elif idx:
         pe = await td.fetch_index_pe(s, ticker)
         pe_label = f"{idx[2].split('·')[0].strip()} P/E"
     else:
-        pe = await td.fetch_pe_history(s, ticker, n=30)
-        pe_label = "P/E (yr-end)"
+        etf_holdings = await td.fetch_etf_holdings(s, ticker)   # None for non-ETFs
+        if not etf_holdings:                              # ETFs show holdings, not P/E
+            pe = await td.fetch_pe_history(s, ticker, n=30)
     fields = [{"k": k, "v": fund[k]} for k in FUND_ORDER if fund and k in fund]
+    name = (prox[1] if prox else (fund.get("Name") if fund else "")) or ""
     return web.json_response({
         "ticker": ticker,
-        "name": (fund.get("Name") if fund else "") or "",
-        "display": idx[2] if idx else (fund.get("Name") if fund else ticker),
+        "name": name,
+        "display": prox[1] if prox else (idx[2] if idx else (fund.get("Name") if fund else ticker)),
         "last": fund.get("Last") if fund else None,
         "change": fund.get("Change") if fund else None,
         "changePct": fund.get("Change %") if fund else None,
@@ -306,6 +333,8 @@ async def api_security(request):
         "pe": [{"year": y, "pe": round(p, 1)} for y, p in pe],
         "pe_label": pe_label,
         "is_crypto": td.is_crypto(ticker),
+        "etf_holdings": etf_holdings,                     # top constituents (ETFs only)
+        "commodity": ({"etf": prox[0], "name": prox[1]} if prox else None),
     })
 
 
@@ -432,7 +461,79 @@ async def api_news_board(request):
     } for s in secs]})
 
 
+# ---- "Share with <other person>": a shared list both terminals can see ----
+BOND_NEWS = [
+    ("TREASURIES & YIELDS", "google",
+     '"Treasury yields" OR "10-year yield" OR "bond market" OR "yield curve" OR "Treasury auction"'),
+    ("FED & RATES", "google",
+     '"Federal Reserve" OR FOMC OR "rate cut" OR "rate hike" OR "interest rates"'),
+    ("CREDIT & CORPORATE BONDS", "google",
+     '"corporate bonds" OR "credit spreads" OR "high yield" OR "investment grade" OR "bond issuance"'),
+    ("GLOBAL RATES & SOVEREIGN", "google",
+     '"German bund" OR "UK gilt" OR "JGB" OR "sovereign debt" OR "global bond yields"'),
+]
+
+
+async def api_topbond(request):
+    """TOP BOND: all bond/Treasury/rates news gathered into one board."""
+    s = request.app["session"]
+    secs = await asyncio.gather(*[td._fetch_section(s, h, src, ref, 10)
+                                  for h, src, ref in BOND_NEWS])
+    out = [{"heading": sec["heading"],
+            "items": [{"title": it["title"], "source": it.get("source", ""),
+                       "link": it.get("link", ""), "age": it.get("age", "")}
+                      for it in sec["items"]]}
+           for sec in secs if sec and sec.get("items")]
+    return web.json_response({"sections": out})
+
+
 RESEARCH_DIR = HERE.parent / "research"
+SHARED_FILE = RESEARCH_DIR / ".shared.json"
+
+
+async def api_share(request):
+    """Save a news article / report to the shared list the other terminal reads."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = (body.get("title") or "").strip()[:300]
+    link = (body.get("link") or "").strip()[:1000]
+    if not title and not link:
+        return web.json_response({"error": "nothing to share"}, status=400)
+    by = (request.cookies.get("kkt_name") or "someone").strip()[:40] or "someone"
+    item = {"title": title, "link": link,
+            "source": (body.get("source") or "").strip()[:80],
+            "kind": (body.get("kind") or "article").strip()[:20],
+            "file": (body.get("file") or "").strip()[:200],
+            "by": by, "at": datetime.now(timezone.utc).isoformat()}
+    try:
+        RESEARCH_DIR.mkdir(exist_ok=True)
+        try:
+            d = json.loads(SHARED_FILE.read_text())
+        except Exception:
+            d = {}
+        items = d.get("items") or []
+        if link:                                          # dedup by link
+            items = [it for it in items if it.get("link") != link]
+        items.insert(0, item)
+        d["items"] = items[:100]
+        SHARED_FILE.write_text(json.dumps(d))
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True})
+
+
+async def api_shared(request):
+    """The shared list, newest first, with a compact age on each item."""
+    try:
+        d = json.loads(SHARED_FILE.read_text())
+    except Exception:
+        d = {"items": []}
+    items = d.get("items", [])
+    for it in items:
+        it["age"] = td._rss_age(it.get("at", ""))
+    return web.json_response({"items": items})
 _RESEARCH_EXT = {".pdf", ".txt", ".md"}
 
 # Public research feeds shown alongside the folder. `readable`=True means the post's
@@ -2121,11 +2222,15 @@ async def index(request):
     import platform
     local_tools = (os.environ.get("MKT_LOCAL_TOOLS") == "1"
                    or (platform.system() == "Darwin" and not os.environ.get("MKT_PASSWORD")))
-    cfg = "<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;</script>" % (
-        "true" if os.environ.get("MKT_NO_PORT") else "false",
-        "true" if local_tools else "false")
     # per-device greeting: ?u=<name> sets & remembers it, else the saved cookie, else env/file
     who = request.query.get("u") or request.cookies.get("kkt_name") or _greeting_name()
+    # "Share with X" target = the OTHER person (Robert<->Ezra); else generic "team"
+    _w = (who or "").strip().lower()
+    share_to = "Ezra" if _w == "robert" else "Robert" if _w == "ezra" else "team"
+    cfg = "<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;</script>" % (
+        "true" if os.environ.get("MKT_NO_PORT") else "false",
+        "true" if local_tools else "false",
+        json.dumps(share_to))
     # security: on the gated cloud app, log every authenticated open under a stable
     # per-device cookie (name if known, else "unknown") with its browser + IP, so each
     # physical device shows up separately and any device that isn't Robert/Ezra stands out
@@ -2295,6 +2400,9 @@ def make_app():
     app.router.add_get("/api/article", api_article)
     app.router.add_post("/api/summarize", api_summarize)
     app.router.add_post("/api/ask_ticker", api_ask_ticker)
+    app.router.add_get("/api/topbond", api_topbond)
+    app.router.add_post("/api/share", api_share)
+    app.router.add_get("/api/shared", api_shared)
     app.router.add_get("/api/daily_brief", api_daily_brief)
     app.router.add_get("/api/last_seen", api_last_seen)
     app.router.add_post("/api/set_gemini", api_set_gemini)

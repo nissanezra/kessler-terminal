@@ -177,12 +177,20 @@ def main():
     _ensure_wezterm_config()                 # every launch: keep the render config in place
     _ensure_deps()
     _ensure_greeting()
-    ref = _resolve_ref()                      # SHA-pinned when possible, never stale
+    # The GitHub self-update and the Rosenberg sync are INDEPENDENT. Rosenberg uses
+    # Robert's own login (not GitHub), so it must run even when the repo is unreachable
+    # (private without a token, offline, etc.) — otherwise a failed update check would
+    # silently stop the reports from downloading.
     try:
-        manifest = json.loads(_fetch("version.json", ref))
+        _run_update()
     except Exception as e:
-        print(f"  update: skipped (offline / no access?) — {e}")
-        return
+        print(f"  update: skipped (offline / no repo access?) — {e}")
+    _run_rosenberg()                          # ALWAYS, regardless of the update outcome
+
+
+def _run_update():
+    ref = _resolve_ref()                      # SHA-pinned when possible, never stale
+    manifest = json.loads(_fetch("version.json", ref))   # raises -> caught in main()
     remote = int(manifest.get("version", 0))
     local = _local_version()
 
@@ -207,7 +215,6 @@ def main():
         print(f"  update: fetching {len(missing)} missing file(s)…")
     else:
         print(f"  update: up to date (v{local})")
-        _run_rosenberg()           # still fetch reports even when the code is current
         return
 
     ok = True
@@ -228,7 +235,6 @@ def main():
         with open(VFILE, "w") as f:
             f.write(str(remote))
     print("  update: done." if ok else "  update: some failed — will retry next launch.")
-    _run_rosenberg()               # after the download, so it uses the freshest code
 
 
 def _run_rosenberg():

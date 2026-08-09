@@ -260,6 +260,15 @@
   #sec-ai-out .rd-sumbody li{margin:0 0 5px;} #sec-ai-out .rd-sumbody .rd-subhd{color:var(--amber);
     font-weight:700;font-size:11.5px;text-transform:uppercase;margin:11px 0 5px;letter-spacing:.04em;}
   .sec-ai-note{color:var(--dim);font-size:10.5px;line-height:1.5;margin-top:7px;font-style:italic;}
+  /* commodity note + ETF holdings on the ticker page */
+  .sec-note{color:var(--dim);font-size:11.5px;line-height:1.5;margin:6px 0;font-style:italic;}
+  .hold-hd{color:var(--amber);font-weight:700;font-size:11px;letter-spacing:.06em;margin:10px 0 5px;}
+  .hold-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1px 18px;}
+  .hold-row{display:flex;align-items:baseline;gap:8px;font-size:12px;padding:1px 0;}
+  .hold-row .hn{flex:1;color:var(--price);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .hold-row .hs{color:var(--amber);font-weight:700;min-width:52px;}
+  .hold-row .hs.hl{cursor:pointer;} .hold-row .hs.hl:hover{text-decoration:underline;}
+  .hold-row .hw{color:var(--dim);min-width:48px;text-align:right;}
   #rd-summary .gk-row{display:flex;gap:6px;margin:8px 0 6px;flex-wrap:wrap;}
   #rd-summary .gk-row input{flex:1;min-width:200px;background:#000;border:1px solid var(--amber);
     color:var(--white);font-family:var(--mono);font-size:13px;padding:5px 8px;border-radius:3px;}
@@ -416,9 +425,11 @@
     <div class="navgroup">
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
       <button class="navbtn" onclick="showNews(null)">NEWS</button>
+      <button class="navbtn" onclick="showTopBond()">TOP BOND</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
+      <button class="navbtn" onclick="showShared()">SHARED</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
-      <button class="navbtn navbtn-calc" id="nav-calc" onclick="showCalc()" style="display:none">🧮 CALCULATOR</button>
+      <button class="navbtn navbtn-calc" id="nav-calc" onclick="showCalc()" style="display:none">CALCULATOR</button>
     </div>
     <div class="tb-right">
       <span class="mkt-status" id="mkt-status"></span>
@@ -451,6 +462,7 @@
     </div>
     <div id="sec-fund"></div>
     <div id="sec-pe"></div>
+    <div id="sec-holdings"></div>
     <div class="chart-top"><div class="tfbar" id="sec-tfbar"></div><span class="crange" id="sec-range"></span><span class="ctitle" style="margin-left:auto">Chart</span></div>
     <div class="daterow" id="sec-daterow"><input type="date" id="sec-from"><span class="dsep">→</span>
       <input type="date" id="sec-to"><button class="btn" onclick="applyCustom('security')">Go</button></div>
@@ -515,6 +527,14 @@
     <div class="news" id="nv-news"></div>
   </div>
 
+  <div id="sharedview" class="view" style="padding:6px 12px;">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" onclick="showShared()">↻ Refresh</button>
+      <span class="ctitle" style="margin-left:auto">SHARED</span></div>
+    <div class="nb-sub" id="sh-sub"></div>
+    <div class="news" id="sh-body"></div>
+  </div>
+
   <div id="researchview" class="view" style="padding:6px 12px;">
     <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
       <span class="ctitle">RESEARCH</span></div>
@@ -534,6 +554,7 @@
   <div id="readerview" class="view">
     <div class="chart-top"><button class="btn" onclick="readerBack()">← Back</button>
       <button class="btn" id="rd-sum-btn" onclick="doSummarize()">✦ Summarize</button>
+      <button class="btn" id="rd-share-btn" onclick="shareCurrent()">Share</button>
       <button class="btn" onclick="window.print()">🖨 Print</button>
       <a class="btn" id="rd-ext" target="_blank" rel="noopener" href="#">Open original ↗</a></div>
     <div id="rd-title"></div>
@@ -544,7 +565,7 @@
 
   <div id="calcview" class="view">
     <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
-      <span class="ctitle" style="margin-left:auto">🧮 INVESTMENT CALCULATOR</span></div>
+      <span class="ctitle" style="margin-left:auto">INVESTMENT CALCULATOR</span></div>
     <div class="calc-grid">
       <!-- Bond -->
       <div class="calc-card">
@@ -713,6 +734,8 @@ connectWS();            // then live stream
 setInterval(()=>{ if((!ws||ws.readyState!==1)&&document.getElementById("monitor").classList.contains("active"))loadMonitor(); },3000);
 // Investment Calculator: local-only (Ezra's Mac). Hidden on the Fly app + Robert's build.
 if(window.LOCAL_TOOLS){ const b=document.getElementById("nav-calc"); if(b)b.style.display=""; }
+// "Share" button labels who it goes to (the other person on the desk).
+{ const sb=document.getElementById("rd-share-btn"); if(sb&&window.SHARE_TO&&window.SHARE_TO!=="team")sb.textContent="Share with "+window.SHARE_TO; }
 
 /* ---------------- charts ---------------- */
 function getChart(id){
@@ -1247,6 +1270,7 @@ async function showSecurity(ticker){
   document.getElementById("sec-head").innerHTML=`<span class="sym">${esc(ticker)}</span><span class="nm dim">loading…</span>`;
   document.getElementById("sec-fund").innerHTML="<p class='dim'>Loading data…</p>";
   document.getElementById("sec-pe").innerHTML="";
+  document.getElementById("sec-holdings").innerHTML="";
   let d; try{d=await(await fetch(`/api/security?ticker=${encodeURIComponent(ticker)}`)).json();}
   catch(e){ if(state.security.ticker===ticker){setLoading(false);
     document.getElementById("sec-fund").innerHTML=`<p class='dim'>Couldn't load ${esc(ticker)}. Check the symbol or your connection.</p>`;} return; }
@@ -1265,6 +1289,18 @@ async function showSecurity(ticker){
     `<div class="pe-wrap"><table class="pe-tab"><tr><td class="lab">${d.pe_label}</td>`+
     pe.map(x=>`<td class="yr">${x.year}</td>`).join("")+`</tr><tr><td></td>`+
     pe.map(x=>`<td class="val">${x.pe}x</td>`).join("")+`</tr></table></div>`:"";
+  // commodity note + ETF holdings
+  let hd="";
+  if(d.commodity){
+    hd+=`<div class="sec-note">Commodity future ${esc(d.ticker)}. Live quote shown above; chart is the ${esc(d.commodity.etf)} ETF as a proxy (labeled on the chart).</div>`;
+  }
+  if(d.etf_holdings&&d.etf_holdings.length){
+    hd+=`<div class="hold-hd">TOP HOLDINGS</div><div class="hold-grid">`+
+      d.etf_holdings.map((x,i)=>`<div class="hold-row"><span class="hn">${i+1}. ${esc(x.name||x.symbol||"?")}</span>`+
+      (x.symbol?`<span class="hs hl" onclick="showSecurity('${esc(x.symbol)}')">${esc(x.symbol)}</span>`:`<span class="hs"></span>`)+
+      `<span class="hw">${esc(x.weight!=null?x.weight+'%':'')}</span></div>`).join("")+`</div>`;
+  }
+  document.getElementById("sec-holdings").innerHTML=hd;
   // chart (awaited: a ticker with no quote, no fundamentals, no P/E AND no chart
   // data doesn't exist — bounce back to the monitor instead of an empty page)
   tfButtons("sec-tfbar",state.security.tf,"setSecTf","security");
@@ -1272,6 +1308,10 @@ async function showSecurity(ticker){
   renderLegend("sec-legend");
   const cd=await loadChartInto("sec-chart",ticker,state.security.tf);
   if(state.security.ticker!==ticker)return;
+  if(cd&&cd.proxy){                                 // commodity: label the chart as a proxy
+    const rg=document.getElementById("sec-range");
+    rg.textContent=(rg.textContent?rg.textContent+"  ":"")+`chart via ${cd.proxy.etf} proxy`;
+  }
   if(!d.last&&!(d.fields&&d.fields.length)&&!(d.pe&&d.pe.length)
      &&!(cd&&cd.price&&cd.price.length)){
     flashToast(`Ticker "${ticker}" not found`);
@@ -1384,6 +1424,7 @@ async function openArticle(elId,i){
   const it=(newsCache[elId]||[])[i]; if(!it)return;
   readerFrom = elId==="sec-news" ? "security" : "newsview";
   readerIsReport=false; readerReportText=""; resetSummary();
+  curShare={title:it.title||"", link:it.link||"", source:it.source||"", kind:"article", file:""};
   show("readerview");
   document.getElementById("rd-title").textContent=it.title;
   document.getElementById("rd-meta").textContent=(it.source||"")+(it.age?"  ·  "+it.age:"");
@@ -1426,10 +1467,11 @@ function embedInReader(url,paywalled){
     +`referrerpolicy="no-referrer" sandbox="allow-scripts allow-popups allow-forms"></iframe></div>`;
 }
 function readerBack(){
-  show(readerFrom==="security"?"security":readerFrom==="research"?"researchview":"newsview"); }
+  show(readerFrom==="security"?"security":readerFrom==="research"?"researchview":
+       readerFrom==="shared"?"sharedview":"newsview"); }
 
 /* ---- AI summarize (Gemini) ---- */
-let readerIsReport=false, readerReportText="";
+let readerIsReport=false, readerReportText="", curShare=null;
 function resetSummary(){
   const box=document.getElementById("rd-summary");
   if(box){ box.className=""; box.innerHTML=""; }
@@ -1663,6 +1705,7 @@ async function showResearch(){
 async function openResearch(i){
   const it=researchItems[i]; if(!it)return;
   readerFrom="research"; readerIsReport=(it.kind==="file"||it.kind==="blurb"); readerReportText=""; resetSummary();
+  curShare={title:it.title||"", link:it.link||"", source:it.author||it.source||"", kind:(it.kind==="file"?"report":"article"), file:it.file||""};
   show("readerview");
   const ext=document.getElementById("rd-ext"), body=document.getElementById("rd-body");
   document.getElementById("rd-title").textContent=it.title;
@@ -1740,6 +1783,87 @@ document.getElementById("addmodal").addEventListener("click",e=>{
 document.getElementById("cmp-add-ticker").addEventListener("keydown",e=>{
   if(e.key==="Enter"){e.stopPropagation();addCompareEntry();}});
 
+/* ---------------- Share with the desk + Shared list + Top Bond ---------------- */
+async function shareCurrent(){
+  const s=curShare, btn=document.getElementById("rd-share-btn");
+  if(!s||(!s.title&&!s.link&&!s.file)){flashToast("Nothing to share");return;}
+  btn.classList.add("busy"); const old=btn.textContent; btn.textContent="Sharing…";
+  try{
+    const r=await fetch("/api/share",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(s)});
+    const d=await r.json();
+    flashToast(d&&d.ok?`Shared with ${window.SHARE_TO||"the desk"}`:"Couldn't share");
+  }catch(e){ flashToast("Couldn't share"); }
+  btn.classList.remove("busy"); btn.textContent=old;
+}
+let sharedCache=[];
+async function showShared(){
+  show("sharedview");
+  const el=document.getElementById("sh-body"); el.innerHTML="<p class='dim'>Loading…</p>";
+  let d; try{d=await(await fetch("/api/shared")).json();}catch(e){d=null;}
+  const items=(d&&d.items)||[]; sharedCache=items;
+  document.getElementById("sh-sub").textContent=items.length?`${items.length} shared item(s)`:"";
+  el.innerHTML = items.length ? items.map((it,i)=>
+    `<div class="it"><span class="bull">• </span>`+
+    `<span class="hl" onclick="openShared(${i})">${esc(it.title||it.link||"(untitled)")}</span>`+
+    (it.source?` <span class="src">${esc(it.source)}</span>`:"")+
+    ` <span class="src">shared by ${esc(it.by||"?")}</span>`+
+    (it.age?` <span class="age">${esc(it.age)}</span>`:"")+`</div>`).join("")
+    : "<p class='dim'>Nothing shared yet. Open any news article or report and tap Share.</p>";
+}
+function openShared(i){
+  const it=sharedCache[i]; if(!it)return;
+  if(it.kind==="report" && it.file){ openReportFile(it.title||it.file, it.file, it.source||""); return; }
+  readerFrom="shared"; readerIsReport=false; readerReportText=""; resetSummary();
+  curShare={title:it.title||"",link:it.link||"",source:it.source||"",kind:"article",file:""};
+  newsCache["_shared"]=[{title:it.title,link:it.link,source:it.source,age:""}];
+  openArticle("_shared",0); readerFrom="shared";
+}
+async function openReportFile(title,file,source){
+  readerFrom="shared"; readerIsReport=true; readerReportText=""; resetSummary();
+  curShare={title:title||"",link:"",source:source||"",kind:"report",file:file};
+  show("readerview");
+  const ext=document.getElementById("rd-ext"), body=document.getElementById("rd-body");
+  ext.style.display="none";
+  document.getElementById("rd-title").textContent=title||file;
+  document.getElementById("rd-meta").textContent=source||"";
+  body.innerHTML="<p class='dim'>Loading…</p>";
+  let a; try{ a=await(await fetch(`/api/research/read?file=${encodeURIComponent(file)}`)).json(); }catch(e){ a=null; }
+  readerReportText=((a&&a.paragraphs)||[]).join("\n\n");
+  if(a&&a.page_count>0){
+    const fq=encodeURIComponent(file); let html="";
+    for(let i=0;i<a.page_count;i++) html+=`<img class="rd-page" src="/api/research/page?file=${fq}&n=${i}" alt="page ${i+1}" loading="lazy">`;
+    body.innerHTML=html;
+  } else {
+    const paras=(a&&a.paragraphs)||[];
+    body.innerHTML = paras.length ? paras.map(p=>`<p>${esc(p)}</p>`).join("") : `<p class="dim">Couldn't read this file.</p>`;
+  }
+}
+async function showTopBond(){
+  show("newsview"); newsMode="topbond";
+  document.getElementById("nv-title").textContent="TOP BOND — BONDS & TREASURIES";
+  document.getElementById("nv-sub").textContent="Bonds, Treasuries, rates & credit, all in one place";
+  const el=document.getElementById("nv-news");
+  const first=!el.querySelector(".nb-cols"); if(first){el.innerHTML="";setLoading(true,"Bond news");}
+  let d; try{ d=await(await fetch("/api/topbond")).json(); }
+  catch(e){ if(first){setLoading(false);el.innerHTML="<p class='dim'>Couldn't load bond news.</p>";} return; }
+  const secs=d.sections||[], flat=[]; secs.forEach(s=>s.items.forEach(it=>flat.push(it)));
+  newsCache["nv-board"]=flat;
+  let gi=0; const cols=[[],[]];
+  secs.forEach((s,si)=>{
+    let sec=`<div class="nb-sec"><div class="nb-head">▌ ${esc(s.heading)}</div>`;
+    for(const it of s.items){ const idx=gi++;
+      sec+=`<div class="nb-item"><span class="nb-title"><span class="bull">• </span>`
+        +`<span class="hl" onclick="openArticle('nv-board',${idx})">${esc(it.title)}</span></span>`
+        +`<span class="src">${esc(it.source||"")}</span><span class="age">${esc(it.age||"")}</span></div>`;
+    }
+    cols[si%2].push(sec+"</div>");
+  });
+  el.innerHTML=`<div class="nb-cols"><div class="nb-col">${cols[0].join("")}</div>`
+    +`<div class="nb-col">${cols[1].join("")}</div></div>`;
+  if(first)setLoading(false);
+}
+
 /* ---------------- command bar ---------------- */
 function run(raw){
   const t=raw.trim().toUpperCase().split(/\s+/); if(!t[0])return;
@@ -1747,6 +1871,8 @@ function run(raw){
   if(["MON","HOME"].includes(cmd))return showMonitor();
   if(["NEWS","WIRE"].includes(cmd))return showNews(null);
   if(["RESEARCH","RSRCH","RSCH","ROSENBERG","ROSIE"].includes(cmd))return showResearch();
+  if((cmd==="TOP"&&(t[1]==="BOND"||t[1]==="BONDS"))||["TOPBOND","BONDS"].includes(cmd))return showTopBond();
+  if(["SHARED","SHARES"].includes(cmd))return showShared();
   if(["PORT","PORTFOLIO","HOLDINGS","PNL"].includes(cmd))return window.NO_PORT?undefined:showPortfolio();
   const ticker=cmd, rest=t.slice(1), fn=rest[0];
   if(["GP","CHART","G"].includes(fn)){const tf=rest.find(x=>TFS.includes(x))||"1Y";return showChart(ticker,tf);}
