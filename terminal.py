@@ -2174,10 +2174,16 @@ def _maybe_launch_web():
     if not os.path.exists(app):
         return False
     import subprocess
-    flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    # Run the web server WINDOWLESS: use pythonw.exe (no console subsystem at all) plus
+    # CREATE_NO_WINDOW, so no second console window pops up next to the app. python.exe
+    # + DETACHED_PROCESS still flashed/kept a console on some machines and confused users.
+    exe = _sys.executable
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    if os.path.exists(pyw):
+        exe = pyw
+    flags = 0x08000000 | 0x00000200      # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     try:
-        subprocess.Popen([_sys.executable, app], cwd=here, close_fds=True,
-                         creationflags=flags)
+        subprocess.Popen([exe, app], cwd=here, close_fds=True, creationflags=flags)
         return True
     except Exception:
         return False
