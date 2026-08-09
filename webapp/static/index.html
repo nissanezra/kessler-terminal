@@ -1721,14 +1721,12 @@ async function openResearch(i){
     // Keep the extracted text stashed so Summarize works regardless of how we display.
     readerReportText=((a&&a.paragraphs)||[]).join("\n\n");
     const fq=encodeURIComponent(it.file);
-    if(window.NATIVE_PDF){
-      // Local builds (Robert's Windows / Ezra's Mac): show the ORIGINAL PDF in the
-      // browser's native viewer — real layout, scroll, zoom, print. Also expose an
-      // "Open PDF" link as a fallback if a given webview can't embed it.
-      ext.href=`/api/research/raw?file=${fq}`; ext.textContent="Open PDF ↗"; ext.style.display="";
-      body.innerHTML=`<iframe class="rd-pdf" src="/api/research/raw?file=${fq}#view=FitH" title="report"></iframe>`;
-    } else if(a&&a.page_count>0){
-      // Phone/cloud app: rendered page images, one at a time (no giant payload; iOS-safe).
+    // Local builds (Robert's Windows / Ezra's Mac): offer an "Open PDF" button to view the
+    // TRUE original in the system browser (some webviews, e.g. WebView2, won't embed a PDF).
+    if(window.NATIVE_PDF){ ext.href=`/api/research/raw?file=${fq}`; ext.textContent="Open PDF ↗"; ext.style.display=""; }
+    // Display: rendered page images — faithful to the PDF, load one at a time, and render
+    // reliably in every webview (WebView2 / WKWebView / iOS). Falls back to text if none.
+    if(a&&a.page_count>0){
       let html="";
       for(let i=0;i<a.page_count;i++)
         html+=`<img class="rd-page" src="/api/research/page?file=${fq}&n=${i}" alt="page ${i+1}" loading="lazy">`;
@@ -1838,10 +1836,8 @@ async function openReportFile(title,file,source){
   let a; try{ a=await(await fetch(`/api/research/read?file=${encodeURIComponent(file)}`)).json(); }catch(e){ a=null; }
   readerReportText=((a&&a.paragraphs)||[]).join("\n\n");
   const fq=encodeURIComponent(file);
-  if(window.NATIVE_PDF){
-    ext.href=`/api/research/raw?file=${fq}`; ext.textContent="Open PDF ↗"; ext.style.display="";
-    body.innerHTML=`<iframe class="rd-pdf" src="/api/research/raw?file=${fq}#view=FitH" title="report"></iframe>`;
-  } else if(a&&a.page_count>0){
+  if(window.NATIVE_PDF){ ext.href=`/api/research/raw?file=${fq}`; ext.textContent="Open PDF ↗"; ext.style.display=""; }
+  if(a&&a.page_count>0){
     let html="";
     for(let i=0;i<a.page_count;i++) html+=`<img class="rd-page" src="/api/research/page?file=${fq}&n=${i}" alt="page ${i+1}" loading="lazy">`;
     body.innerHTML=html;
