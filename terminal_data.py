@@ -194,17 +194,19 @@ async def _nasdaq_daily(session, ticker, fromdate, todate):
     return bars
 
 
-# Index aliases. kind "nasdaq" = real index level via Nasdaq; "proxy" = an ETF
-# that tracks it (Dow/S&P/Russell have no free index-level feed). label is shown.
+# Index aliases. kind "nasdaq" = real index level via Nasdaq; "proxy" = an ETF that
+# tracks it (Dow/S&P/Russell have no free index-level feed). Optional 4th element is a
+# SCALE so the proxy chart reads at index level (DIA is ~1/100 of the Dow, SPY ~1/10 of
+# the S&P 500, IWM ~1/10 of the Russell 2000). label is shown.
 INDEX_ALIAS = {
-    "DOW": ("proxy", "DIA", "DOW JONES · DIA"), "DJIA": ("proxy", "DIA", "DOW JONES · DIA"),
-    "DJI": ("proxy", "DIA", "DOW JONES · DIA"), ".DJI": ("proxy", "DIA", "DOW JONES · DIA"),
-    "INDU": ("proxy", "DIA", "DOW JONES · DIA"),
-    "SPX": ("proxy", "SPY", "S&P 500 · SPY"), "SP500": ("proxy", "SPY", "S&P 500 · SPY"),
-    "GSPC": ("proxy", "SPY", "S&P 500 · SPY"), ".SPX": ("proxy", "SPY", "S&P 500 · SPY"),
-    "SPX500": ("proxy", "SPY", "S&P 500 · SPY"),
-    "RUT": ("proxy", "IWM", "RUSSELL 2000 · IWM"), ".RUT": ("proxy", "IWM", "RUSSELL 2000 · IWM"),
-    "RUSSELL": ("proxy", "IWM", "RUSSELL 2000 · IWM"),
+    "DOW": ("proxy", "DIA", "DOW JONES · DIA", 100), "DJIA": ("proxy", "DIA", "DOW JONES · DIA", 100),
+    "DJI": ("proxy", "DIA", "DOW JONES · DIA", 100), ".DJI": ("proxy", "DIA", "DOW JONES · DIA", 100),
+    "INDU": ("proxy", "DIA", "DOW JONES · DIA", 100),
+    "SPX": ("proxy", "SPY", "S&P 500 · SPY", 10), "SP500": ("proxy", "SPY", "S&P 500 · SPY", 10),
+    "GSPC": ("proxy", "SPY", "S&P 500 · SPY", 10), ".SPX": ("proxy", "SPY", "S&P 500 · SPY", 10),
+    "SPX500": ("proxy", "SPY", "S&P 500 · SPY", 10),
+    "RUT": ("proxy", "IWM", "RUSSELL 2000 · IWM", 10), ".RUT": ("proxy", "IWM", "RUSSELL 2000 · IWM", 10),
+    "RUSSELL": ("proxy", "IWM", "RUSSELL 2000 · IWM", 10),
     "NASDAQ": ("nasdaq", "COMP", "NASDAQ COMPOSITE"),
     "COMP": ("nasdaq", "COMP", "NASDAQ COMPOSITE"),
     "IXIC": ("nasdaq", "COMP", "NASDAQ COMPOSITE"), ".IXIC": ("nasdaq", "COMP", "NASDAQ COMPOSITE"),
@@ -395,29 +397,39 @@ async def fetch_history(session, ticker, tf="1Y", custom=None):
     if fr:
         return await _fred_hist(session, fr[0], tf, custom)
     idx = resolve_index(ticker)
+    scale = 1
     if idx:
-        kind, sym, _label = idx
+        kind, sym = idx[0], idx[1]
         if kind == "nasdaq":
             return await _nasdaq_index_hist(session, sym, tf, custom)
+        scale = idx[3] if len(idx) > 3 else 1     # proxy ETF -> index-level scale (DIA*100 etc.)
         ticker = sym   # proxy ETF -> fetch like a normal stock below
     if custom:
         # ticker is already index-resolved above (nasdaq returned, proxy -> ETF symbol)
         if is_crypto(ticker):
-            return await _binance_custom(session, ticker, custom[0], custom[1])
-        return await _nasdaq_daily(session, ticker, custom[0], custom[1])
-    if is_crypto(ticker):
-        return await _binance_hist(session, ticker, tf)
-    if tf == "1D":
-        return await _nasdaq_intraday(session, ticker)
-    if tf == "ALL":
+            bars = await _binance_custom(session, ticker, custom[0], custom[1])
+        else:
+            bars = await _nasdaq_daily(session, ticker, custom[0], custom[1])
+    elif is_crypto(ticker):
+        bars = await _binance_hist(session, ticker, tf)
+    elif tf == "1D":
+        bars = await _nasdaq_intraday(session, ticker)
+    elif tf == "ALL":
         # full available history (StockAnalysis caps at 10Y; Nasdaq goes back decades)
         today = datetime.now().strftime("%Y-%m-%d")
         bars = await _nasdaq_daily(session, ticker, "1970-01-01", today)
-        if bars:
-            return bars
-        # fall back to StockAnalysis 10Y if Nasdaq has nothing (e.g. some indices)
-    sarange, tail = SA_TF.get(tf, ("1Y", None))
-    return await _sa_hist(session, ticker, sarange, tail)
+        if not bars:                              # fall back to StockAnalysis 10Y
+            sarange, tail = SA_TF.get("ALL", ("1Y", None))
+            bars = await _sa_hist(session, ticker, sarange, tail)
+    else:
+        sarange, tail = SA_TF.get(tf, ("1Y", None))
+        bars = await _sa_hist(session, ticker, sarange, tail)
+    if scale != 1 and bars:                       # scale the ETF proxy up to index level
+        for b in bars:
+            for k in ("o", "h", "l", "c"):
+                if b.get(k) is not None:
+                    b[k] = b[k] * scale
+    return bars
 
 
 # ---------------------------------------------------------------------------
