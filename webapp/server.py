@@ -262,6 +262,32 @@ async def api_chart(request):
     sma50, sma100, sma200 = (line_ind(td.sma(full, n)) for n in (50, 100, 200))
     rsi = line_ind(td.rsi(full, 14))
 
+    # Include TODAY: the daily history source can lag intraday (today's bar isn't posted
+    # until the close), so the chart would end at yesterday during the trading day. Append
+    # (or refresh) today's point from the live quote. Weekdays only; stocks/ETFs/index
+    # proxies (fetch the live quote for the charted symbol, scaled for index proxies).
+    if (tf not in ("1D", "CUSTOM") and price and not td.is_crypto(ticker)
+            and datetime.now().weekday() < 5):
+        _idx = td.resolve_index(ticker)
+        if _idx and _idx[0] == "proxy":
+            live_sym, lscale = _idx[1], (_idx[3] if len(_idx) > 3 else 1)
+        elif not _idx:
+            live_sym, lscale = ticker, 1
+        else:
+            live_sym, lscale = None, 1          # nasdaq index: leave as-is
+        if live_sym:
+            try:
+                _f = await td.fetch_fundamentals(s, live_sym)
+                live = (float(str(_f.get("Last", "")).replace(",", "")) * lscale) if _f else None
+            except Exception:
+                live = None
+            if live:
+                today = datetime.now().strftime("%Y-%m-%d")
+                if price[-1]["time"] == today:
+                    price[-1]["value"] = round(live, 4)     # refresh today's point to live
+                else:
+                    price.append({"time": today, "value": round(live, 4)})
+
     # Decimate very long series. lightweight-charts won't zoom out past ~0.5px/bar, so
     # thousands of daily bars (e.g. FEDFUNDS ALL ~26k, or any 10Y) can't fit and
     # fitContent() clips to the most recent slice. Thin to a width-friendly count,
