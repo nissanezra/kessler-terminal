@@ -424,14 +424,17 @@ async def _cnbc_hist(session, symbol, tf="1Y", custom=None):
         if attempt < 2:
             await asyncio.sleep(0.5 * (attempt + 1))
     intraday = (tf == "1D")
+
+    def _num(v):                                    # yields come as "4.641%"; strip it
+        return float(str(v).replace(",", "").rstrip("%"))
+
     bars = []
     for b in pbars:
         tt = str(b.get("tradeTime") or "")
         if len(tt) < 8 or b.get("close") in (None, ""):
             continue
         try:
-            o, h = float(b["open"]), float(b["high"])
-            lo, c = float(b["low"]), float(b["close"])
+            o, h, lo, c = _num(b["open"]), _num(b["high"]), _num(b["low"]), _num(b["close"])
         except (TypeError, ValueError, KeyError):
             continue
         if intraday:
@@ -439,10 +442,16 @@ async def _cnbc_hist(session, symbol, tf="1Y", custom=None):
                 label = datetime.strptime(tt[:12], "%Y%m%d%H%M").strftime("%I:%M %p")
             except ValueError:
                 continue
+            bars.append({"t": label, "day": tt[:8], "o": o, "h": h, "l": lo, "c": c})
         else:
-            label = f"{tt[0:4]}-{tt[4:6]}-{tt[6:8]}"
-        bars.append({"t": label, "o": o, "h": h, "l": lo, "c": c})
+            bars.append({"t": f"{tt[0:4]}-{tt[4:6]}-{tt[6:8]}", "o": o, "h": h, "l": lo, "c": c})
     if intraday:
+        # CNBC's 1D token returns ~3 days of minute bars; keep only the latest day so the
+        # intraday chart doesn't stack multiple sessions onto today's date.
+        if bars:
+            lastday = bars[-1]["day"]
+            bars = [{k: v for k, v in b.items() if k != "day"}
+                    for b in bars if b["day"] == lastday]
         return bars
     if custom:                                    # warmup / custom date window
         frm, to = custom
@@ -460,6 +469,11 @@ async def fetch_history(session, ticker, tf="1Y", custom=None):
 
     tf is one of TF_ORDER. `custom=(fromdate, todate)` overrides tf with a daily
     range (YYYY-MM-DD)."""
+    # US Treasury cash yields (US3M…US30Y): CNBC carries the CURRENT yield and intraday
+    # bars, whereas FRED's DGS-series lag a business day and have no 1D. Use CNBC so the
+    # chart shows today's yield and 1D works. (FRED still serves fed funds / spreads.)
+    if re.fullmatch(r"US\d+[MY]", ticker.upper()):
+        return await _cnbc_hist(session, ticker.upper(), tf, custom)
     fr = resolve_fred(ticker)
     if fr:
         return await _fred_hist(session, fr[0], tf, custom)

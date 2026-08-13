@@ -173,6 +173,7 @@
   .fa-tab .fa-lab2,.fa-tab .fa-rowlab2{text-align:left;color:var(--white);}
   .fa-yr{color:var(--amber);font-weight:700;} .fa-yr.partial{color:var(--blue);}
   .fa-val{color:var(--white);} .fa-val.amber{color:var(--amber);} .fa-val.dim{color:var(--dim);}
+  .fa-tab .clk{cursor:pointer;} .fa-tab .clk:hover{text-decoration:underline;}
   .fa-tab .fa-rowlab.fcf,.fa-tab .fa-val.fcf{color:#34c3d6;font-weight:700;}
   .fa-src{color:var(--dim);font-size:11px;margin:10px 0 20px;max-width:900px;line-height:1.5;}
   /* ---- portfolio (PORT) view ---- */
@@ -1116,7 +1117,8 @@ async function showFinancials(ticker){
   if(d.type==="etf"){
     body.innerHTML=faHoldingsTable(`${esc(d.ticker)} — Top ETF Holdings`,["#","HOLDING","TICKER","WEIGHT"],
       (d.etf_holdings||[]).map((x,i)=>[`<span class="dim">${i+1}</span>`,esc(x.name||"?"),
-        `<span class="amber">${esc(x.symbol||"")}</span>`,esc(x.weight||"")]),
+        x.symbol?`<span class="amber clk" onclick="showSecurity('${esc(x.symbol)}')">${esc(x.symbol)}</span>`:"",
+        esc(x.weight?x.weight+"%":"")]),
       "Source: StockAnalysis · weights by portfolio allocation"); return; }
   if(!d.statements||!d.statements.length){
     body.innerHTML=`<p class="dim">No SEC financials found for ${esc(ticker)}.</p>`; return; }
