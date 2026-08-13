@@ -157,8 +157,11 @@ async def api_ws(request):
 
 
 async def monitor_broadcast(app):
-    """Every 0.5s, diff the monitor and push only the rows whose value changed."""
+    """Every 0.5s, diff the monitor and push changes. Row VALUE changes go out as a light
+    'update'; when the set of ROWS changes (a ticker was added, or DEL'd/hidden) push a
+    fresh 'full' so every connected client rebuilds — no relaunch needed to see new rows."""
     last = {}
+    last_keys = None
     try:
         while True:
             await asyncio.sleep(0.5)
@@ -169,9 +172,20 @@ async def monitor_broadcast(app):
                     newlast[r["key"]] = r["raw"]
                     if last.get(r["key"], object()) != r["raw"]:
                         changed.append(r)
-            last = newlast
+            keys = set(newlast)
+            structural = last_keys is not None and keys != last_keys
+            last, last_keys = newlast, keys
             clients = app["ws_clients"]
-            if not clients or not changed:
+            if not clients:
+                continue
+            if structural:                         # rows added/removed -> full rebuild
+                for ws in list(clients):
+                    try:
+                        await ws.send_json({"type": "full", **mon})
+                    except Exception:
+                        clients.discard(ws)
+                continue
+            if not changed:
                 continue
             for ws in list(clients):
                 try:
