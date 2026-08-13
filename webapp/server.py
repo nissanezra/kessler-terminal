@@ -352,9 +352,16 @@ async def api_security(request):
     """Ticker detail: header quote, fundamentals grid, and P/E history."""
     ticker = request.query.get("ticker", "AAPL").upper()
     s = request.app["session"]
-    fund = await td.fetch_fundamentals(s, ticker)          # CNBC quote works for @GC.1 etc.
     prox = COMMODITY_PROXY.get(ticker)
     idx = td.resolve_index(ticker)
+    # StockAnalysis has profiles only for real stocks/ETFs — skip indices/futures/crypto.
+    want_desc = not prox and not idx and not td.is_crypto(ticker)
+    if want_desc:
+        fund, description = await asyncio.gather(
+            td.fetch_fundamentals(s, ticker),              # CNBC quote works for @GC.1 etc.
+            td.fetch_description(s, ticker))
+    else:
+        fund, description = await td.fetch_fundamentals(s, ticker), None
     pe, pe_label, etf_holdings = [], "P/E (yr-end)", None
     if prox:
         pe_label = ""                                     # commodities have no P/E
@@ -380,6 +387,7 @@ async def api_security(request):
         "pe_label": pe_label,
         "is_crypto": td.is_crypto(ticker),
         "etf_holdings": etf_holdings,                     # top constituents (ETFs only)
+        "description": description,                        # business/fund profile (stocks/ETFs)
         "commodity": ({"etf": prox[0], "name": prox[1]} if prox else None),
     })
 

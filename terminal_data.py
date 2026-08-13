@@ -741,6 +741,52 @@ async def fetch_etf_holdings(session, ticker, top=15):
     return result[:top] if result else None
 
 
+# Business/fund description from StockAnalysis' profile page (same deduped SvelteKit
+# payload as holdings). A stock lives under /stocks/, a fund under /etf/, so try both.
+SA_DESC = "https://stockanalysis.com/{kind}/{t}/__data.json?x-sveltekit-invalidated=001"
+_DESC_CACHE: dict = {}
+_DESC_TTL = 24 * 3600           # profiles barely change; cache a day
+
+
+def _sa_deref_description(flat):
+    if not isinstance(flat, list) or not flat or not isinstance(flat[0], dict):
+        return None
+    di = flat[0].get("description")
+    if di is None:
+        return None
+    v = flat[di] if isinstance(di, int) else di
+    return v.strip() if isinstance(v, str) and v.strip() else None
+
+
+async def fetch_description(session, ticker):
+    """One-paragraph company/ETF description, or None if the profile has none."""
+    key = ticker.upper()
+    hit = _DESC_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _DESC_TTL:
+        return hit[1]
+    result = None
+    for kind in ("stocks", "etf"):
+        try:
+            async with session.get(
+                    SA_DESC.format(kind=kind, t=key),
+                    headers={**UA, "Referer": "https://stockanalysis.com/"},
+                    timeout=aiohttp.ClientTimeout(total=12)) as r:
+                if r.status != 200:
+                    continue
+                d = await r.json(content_type=None)
+            for node in (d.get("nodes") or []):
+                if node.get("type") == "data":
+                    result = _sa_deref_description(node.get("data"))
+                    if result:
+                        break
+            if result:
+                break
+        except Exception:
+            continue
+    _DESC_CACHE[key] = (time.time(), result)
+    return result
+
+
 async def fetch_institutional_holders(session, ticker, top=15):
     """Top institutional holders of a stock + % institutional ownership."""
     try:

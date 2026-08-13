@@ -194,6 +194,7 @@
   .sec-head{font-size:15px;margin-bottom:8px;}
   .sec-head .sym{background:var(--amber);color:#000;font-weight:700;padding:1px 7px;}
   .sec-head .nm{color:var(--white);font-weight:700;margin-left:8px;}
+  .sec-desc .desc-p{color:var(--dim);font-size:12.5px;line-height:1.55;max-width:920px;margin:8px 0 2px;}
   .fundgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1px 18px;margin:8px 0;}
   .fundgrid .f{display:flex;justify-content:space-between;}
   .fundgrid .fk{color:var(--amber);} .fundgrid .fv{color:var(--white);font-weight:700;}
@@ -463,6 +464,7 @@
       <div id="sec-ai-out"></div>
       <div class="sec-ai-note">AI answers use this terminal's live data plus general knowledge. Not investment advice; verify anything important.</div>
     </div>
+    <div id="sec-desc" class="sec-desc"></div>
     <div id="sec-fund"></div>
     <div id="sec-pe"></div>
     <div id="sec-holdings"></div>
@@ -1275,6 +1277,7 @@ async function showSecurity(ticker){
   document.getElementById("sec-fund").innerHTML="<p class='dim'>Loading data…</p>";
   document.getElementById("sec-pe").innerHTML="";
   document.getElementById("sec-holdings").innerHTML="";
+  document.getElementById("sec-desc").innerHTML="";
   let d; try{d=await(await fetch(`/api/security?ticker=${encodeURIComponent(ticker)}`)).json();}
   catch(e){ if(state.security.ticker===ticker){setLoading(false);
     document.getElementById("sec-fund").innerHTML=`<p class='dim'>Couldn't load ${esc(ticker)}. Check the symbol or your connection.</p>`;} return; }
@@ -1284,6 +1287,9 @@ async function showSecurity(ticker){
   document.getElementById("sec-head").innerHTML=
     `<span class="sym">${d.ticker}</span><span class="nm">${d.name||d.display||""}</span>`+
     (d.last?` <span class="${cls}" style="margin-left:10px;font-weight:700">${d.last} ${d.change||""} (${d.changePct||""})</span>`:"");
+  // business / fund description
+  document.getElementById("sec-desc").innerHTML = d.description?
+    `<p class="desc-p">${esc(d.description)}</p>`:"";
   // fundamentals
   document.getElementById("sec-fund").innerHTML = d.fields&&d.fields.length?
     `<div class="fundgrid">`+d.fields.map(f=>`<div class="f"><span class="fk">${f.k}</span><span class="fv">${f.v}</span></div>`).join("")+`</div>`:"";
