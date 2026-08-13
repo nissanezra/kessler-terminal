@@ -478,11 +478,24 @@ FRED_UNITS = {"CPIAUCSL": "pc1", "CPILFESL": "pc1", "PCEPI": "pc1",
 async def fred_fetch_one(session, sid, key):
     params = {"series_id": sid, "api_key": key, "file_type": "json",
               "sort_order": "desc", "limit": "5", "units": FRED_UNITS.get(sid, "lin")}
-    async with session.get(FRED_URL, params=params,
-                           timeout=aiohttp.ClientTimeout(total=15)) as resp:
-        data = await resp.json(content_type=None)
-    obs = [(o["date"], float(o["value"])) for o in data.get("observations", [])
-           if o.get("value") not in (".", "", None)]
+    # FRED throttles a large concurrent burst (429), which used to leave rows blank
+    # for a full refresh cycle. Retry transient failures with backoff before giving up.
+    obs = []
+    for attempt in range(4):
+        try:
+            async with session.get(FRED_URL, params=params,
+                                   timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    obs = [(o["date"], float(o["value"]))
+                           for o in data.get("observations", [])
+                           if o.get("value") not in (".", "", None)]
+                    if obs:
+                        break
+        except Exception:
+            pass
+        if attempt < 3:
+            await asyncio.sleep(0.6 * (attempt + 1))      # 0.6s, 1.2s, 1.8s
     if not obs:
         return
     mult = (100.0 if sid.startswith("BAML") or sid in ("BAA10Y", "AAA10Y")
@@ -505,12 +518,18 @@ async def fred_loop():
         for sid in sids:
             STATE[sid].tdisp = "need key"
         return
+    sem = asyncio.Semaphore(6)          # cap the burst so FRED doesn't 429 us
+
+    async def _one(session, s):
+        async with sem:
+            return await fred_fetch_one(session, s, key)
+
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             while True:
                 try:
                     res = await asyncio.gather(
-                        *(fred_fetch_one(session, s, key) for s in sids),
+                        *(_one(session, s) for s in sids),
                         return_exceptions=True)
                     errs = [r for r in res if isinstance(r, Exception)]
                     STATUS["fred"] = "ok" if not errs else f"partial({len(errs)})"

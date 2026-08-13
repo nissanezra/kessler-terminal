@@ -12,6 +12,7 @@ import asyncio
 import html as _html
 import json
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -590,25 +591,72 @@ async def _concept_data(session, cik, candidates):
     return annual, best_partial, ends
 
 
-SA_ETF_HOLD = "https://stockanalysis.com/api/symbol/e/{t}/holdings"
+# StockAnalysis serves holdings from a SvelteKit "data" endpoint (their old JSON
+# API returns 404). The payload is deduplicated: any integer is an index back into
+# the same flat list, so a holding's fields must be dereferenced one level.
+SA_ETF_HOLD = ("https://stockanalysis.com/etf/{t}/holdings/"
+               "__data.json?x-sveltekit-invalidated=001")
 NASDAQ_INST = "https://api.nasdaq.com/api/company/{t}/institutional-holdings"
+
+_ETF_HOLD_CACHE: dict = {}          # ticker -> (epoch, holdings-or-None)
+_ETF_HOLD_TTL = 6 * 3600           # holdings change slowly; cache 6h
+
+
+def _sa_deref_holdings(flat):
+    """Pull the holdings list out of StockAnalysis' deduplicated data array."""
+    if not isinstance(flat, list) or not flat or not isinstance(flat[0], dict):
+        return None
+    root = flat[0]
+    if "holdings" not in root:
+        return None
+    hi = root["holdings"]
+    idx_list = flat[hi] if isinstance(hi, int) else hi
+    if not isinstance(idx_list, list):
+        return None
+    out = []
+    for it in idx_list:
+        obj = flat[it] if isinstance(it, int) else it
+        if not isinstance(obj, dict):
+            continue
+
+        def field(k):
+            v = obj.get(k)
+            return flat[v] if isinstance(v, int) else v      # one level of indirection
+
+        out.append({"n": field("n"), "s": field("s"),
+                    "as": field("as"), "sh": field("sh")})
+    return out or None
 
 
 async def fetch_etf_holdings(session, ticker, top=15):
     """Top constituent holdings of an ETF (name, symbol, weight%). None if not an ETF."""
+    key = ticker.upper()
+    hit = _ETF_HOLD_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _ETF_HOLD_TTL:
+        return hit[1][:top] if hit[1] else None
+    result = None
     try:
-        async with session.get(SA_ETF_HOLD.format(t=ticker.upper()), headers=UA,
-                               timeout=aiohttp.ClientTimeout(total=12)) as r:
-            if r.status != 200:
-                return None
-            d = await r.json(content_type=None)
-        hold = (d.get("data") or {}).get("holdings")
-        if not hold:
-            return None
-        return [{"name": h.get("n"), "symbol": (h.get("s") or "").lstrip("$!").split("/")[-1],
-                 "weight": h.get("as")} for h in hold[:top]]
+        async with session.get(
+                SA_ETF_HOLD.format(t=key),
+                headers={**UA, "Referer": "https://stockanalysis.com/etf/%s/" % key},
+                timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                d = await r.json(content_type=None)
+                hold = None
+                for node in (d.get("nodes") or []):
+                    if node.get("type") == "data":
+                        hold = _sa_deref_holdings(node.get("data"))
+                        if hold:
+                            break
+                if hold:
+                    result = [{"name": h.get("n"),
+                               "symbol": (h.get("s") or "").lstrip("$!").split("/")[-1],
+                               "weight": (h.get("as") or "").rstrip("%") or None,
+                               "shares": h.get("sh")} for h in hold]
     except Exception:
-        return None
+        result = None
+    _ETF_HOLD_CACHE[key] = (time.time(), result)
+    return result[:top] if result else None
 
 
 async def fetch_institutional_holders(session, ticker, top=15):
