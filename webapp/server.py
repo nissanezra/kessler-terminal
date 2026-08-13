@@ -308,10 +308,16 @@ async def api_chart(request):
             thin, (price, sma50, sma100, sma200, rsi))
 
     idx = td.resolve_index(ticker)
+    # Friendly chart title: proxy/index label, else the monitor's own label for a
+    # CNBC-native symbol (".TRAN" -> "TRANSPORTS", ".DXY" -> "USD INDEX"), else the symbol.
+    display = proxy[1] if proxy else (idx[2] if idx else None)
+    if not display:
+        q = dash.STATE.get(ticker)
+        display = q.label if q and getattr(q, "label", None) else ticker
     return web.json_response({
         "ticker": ticker, "tf": tf,
         "price": price, "sma50": sma50, "sma100": sma100, "sma200": sma200,
-        "rsi": rsi, "display": (proxy[1] if proxy else (idx[2] if idx else ticker)),
+        "rsi": rsi, "display": display,
         # FRED series (rates/yields/spreads/econ) are levels, not tradeable prices,
         # so the compare legend shows % only (no dollar value) for them.
         "rate": bool(td.resolve_fred(ticker)),

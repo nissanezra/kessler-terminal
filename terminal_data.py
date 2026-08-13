@@ -389,6 +389,72 @@ async def _nasdaq_index_hist(session, symbol, tf, custom=None):
     return bars
 
 
+# CNBC's own chart API (webql-redesign.cnbcfm.com — note .cnbcfm.com, not .cnbc.com)
+# serves daily history for every symbol CNBC quotes: cash indices (".TRAN", ".DXY",
+# ".GDAXI" and the other world indices), index futures ("@DJ.1", "@ND.1") and Treasury
+# futures ("@TU.1"…) — none of which StockAnalysis/Nasdaq carry. Identity symbol map.
+CNBC_CHART = "https://webql-redesign.cnbcfm.com/graphql"
+_CNBC_HASH = "9e1670c29a10707c417a1efd327d4b2b1d456b77f1426e7e84fb7d399416bb6b"
+# CNBC's timeRange tokens over-deliver (1Y≈2yr daily, 5Y≈10yr weekly); we fetch a token
+# that comfortably covers the window, then trim to the requested timeframe below.
+_CNBC_TF = {"1D": "1D", "1W": "1Y", "1M": "1Y", "3M": "1Y", "6M": "1Y", "1Y": "1Y",
+            "5Y": "5Y", "10Y": "5Y", "ALL": "ALL"}
+
+
+async def _cnbc_hist(session, symbol, tf="1Y", custom=None):
+    """Daily (or 1D intraday) history for a CNBC-native index/futures symbol."""
+    time_range = "5Y" if custom else _CNBC_TF.get(tf, "1Y")
+    params = {"operationName": "getQuoteChartData",
+              "variables": json.dumps({"symbol": symbol, "timeRange": time_range}),
+              "extensions": json.dumps(
+                  {"persistedQuery": {"version": 1, "sha256Hash": _CNBC_HASH}})}
+    pbars = []
+    for attempt in range(3):                       # CNBC occasionally 200s with 0 bars
+        try:
+            async with session.get(CNBC_CHART, params=params, headers=UA,
+                                   timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 200:
+                    d = await r.json(content_type=None)
+                    pbars = (((d.get("data") or {}).get("chartData") or {})
+                             .get("priceBars")) or []
+                    if pbars:
+                        break
+        except Exception:
+            pass
+        if attempt < 2:
+            await asyncio.sleep(0.5 * (attempt + 1))
+    intraday = (tf == "1D")
+    bars = []
+    for b in pbars:
+        tt = str(b.get("tradeTime") or "")
+        if len(tt) < 8 or b.get("close") in (None, ""):
+            continue
+        try:
+            o, h = float(b["open"]), float(b["high"])
+            lo, c = float(b["low"]), float(b["close"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if intraday:
+            try:
+                label = datetime.strptime(tt[:12], "%Y%m%d%H%M").strftime("%I:%M %p")
+            except ValueError:
+                continue
+        else:
+            label = f"{tt[0:4]}-{tt[4:6]}-{tt[6:8]}"
+        bars.append({"t": label, "o": o, "h": h, "l": lo, "c": c})
+    if intraday:
+        return bars
+    if custom:                                    # warmup / custom date window
+        frm, to = custom
+        return [b for b in bars if frm <= b["t"] <= to]
+    days = _TF_DAYS.get(tf)                        # trim to the requested timeframe
+    if days and bars:
+        cutoff = (datetime.fromisoformat(bars[-1]["t"])
+                  - timedelta(days=days)).strftime("%Y-%m-%d")
+        bars = [b for b in bars if b["t"] >= cutoff]
+    return bars
+
+
 async def fetch_history(session, ticker, tf="1Y", custom=None):
     """Return list of bars (dicts with t label and c close; o/h/l when available).
 
@@ -405,6 +471,8 @@ async def fetch_history(session, ticker, tf="1Y", custom=None):
             return await _nasdaq_index_hist(session, sym, tf, custom)
         scale = idx[3] if len(idx) > 3 else 1     # proxy ETF -> index-level scale (DIA*100 etc.)
         ticker = sym   # proxy ETF -> fetch like a normal stock below
+    elif ticker[:1] in (".", "@"):                # CNBC-native index / futures symbol
+        return await _cnbc_hist(session, ticker, tf, custom)
     if custom:
         # ticker is already index-resolved above (nasdaq returned, proxy -> ETF symbol)
         if is_crypto(ticker):

@@ -656,13 +656,19 @@ def _click_cmd(sym, provider="cnbc"):
     if provider == "fred":                                  # HY OAS -> HY GP, etc.
         a = _FRED_REV.get(sym)
         return (a + " GP") if a else None
-    if sym in _INDEX_CLICK:                                 # US index -> DOW GP
+    if sym in _INDEX_CLICK:                                 # US index -> DOW GP (proxy+scale)
         return _INDEX_CLICK[sym] + " GP"
-    if sym in _PROXY_CLICK:                                 # futures/FX/world idx -> ETF proxy
+    if sym[:1] in ".@":
+        # CNBC charts these directly at their real index level (Transports, world
+        # indices, DXY, VIX, index & Treasury futures, commodity futures), so open the
+        # symbol's OWN page instead of an ETF proxy. (Commodities in the web app are
+        # still routed to their labeled proxy chart by build_monitor's COMMODITY_PROXY.)
+        return sym
+    if sym in _PROXY_CLICK:                                 # FX pair -> ETF proxy
         return _PROXY_CLICK[sym] + " GP"
     if sym.startswith("US") and sym[2:-1].isdigit() and sym[-1] in "MY":
         return sym + " GP"                                  # treasury yield -> US10Y GP
-    if sym[:1] in ".@" or sym.endswith("="):                # unmapped FX/futures/world idx
+    if sym.endswith("="):                                   # unmapped FX pair -> not clickable
         return None
     return sym                                              # stock / ETF -> detail page
 
