@@ -1,5 +1,5 @@
 {
-  "version": 100,
+  "version": 101,
   "files": [
     "terminal.py",
     "dashboard.py",

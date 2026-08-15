@@ -403,7 +403,18 @@ _CNBC_TF = {"1D": "1D", "1W": "1Y", "1M": "1Y", "3M": "1Y", "6M": "1Y", "1Y": "1
 
 async def _cnbc_hist(session, symbol, tf="1Y", custom=None):
     """Daily (or 1D intraday) history for a CNBC-native index/futures symbol."""
-    time_range = "5Y" if custom else _CNBC_TF.get(tf, "1Y")
+    if custom:
+        # Pick a token WIDE enough to cover the requested window, then filter below.
+        # ("5Y" only reaches ~10yr, so a 1981-start range needs "ALL".)
+        frm, to = custom
+        try:
+            span = (datetime.fromisoformat(to) - datetime.fromisoformat(frm)).days / 365.25
+        except Exception:
+            span = 2
+        time_range = ("1Y" if span <= 2 else "6M" if span <= 3
+                      else "5Y" if span <= 10 else "ALL")
+    else:
+        time_range = _CNBC_TF.get(tf, "1Y")
     params = {"operationName": "getQuoteChartData",
               "variables": json.dumps({"symbol": symbol, "timeRange": time_range}),
               "extensions": json.dumps(
