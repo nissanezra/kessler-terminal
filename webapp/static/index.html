@@ -272,7 +272,7 @@
   .hold-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1px 18px;}
   .hold-row{display:flex;align-items:baseline;gap:8px;font-size:12px;padding:1px 0;}
   .hold-row .hn{flex:1;color:var(--price);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .hold-row .hs{color:var(--amber);font-weight:700;min-width:52px;}
+  .hold-row .hs{color:var(--yellow);font-weight:700;min-width:52px;}
   .hold-row .hs.hl{cursor:pointer;} .hold-row .hs.hl:hover{text-decoration:underline;}
   .hold-row .hw{color:var(--dim);min-width:48px;text-align:right;}
   #rd-summary .gk-row{display:flex;gap:6px;margin:8px 0 6px;flex-wrap:wrap;}
@@ -1190,7 +1190,7 @@ async function showFinancials(ticker){
   if(d.type==="etf"){
     body.innerHTML=faHoldingsTable(`${esc(d.ticker)} — Top ETF Holdings`,["#","HOLDING","TICKER","WEIGHT"],
       (d.etf_holdings||[]).map((x,i)=>[`<span class="dim">${i+1}</span>`,esc(x.name||"?"),
-        x.symbol?`<span class="amber clk" onclick="showSecurity('${esc(x.symbol)}')">${esc(x.symbol)}</span>`:"",
+        x.symbol?`<span class="clk" style="color:var(--yellow)" onclick="showSecurity('${esc(x.symbol)}')">${esc(x.symbol)}</span>`:"",
         esc(x.weight?x.weight+"%":"")]),
       "Source: StockAnalysis · weights by portfolio allocation"); return; }
   if(!d.statements||!d.statements.length){
