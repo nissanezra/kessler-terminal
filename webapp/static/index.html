@@ -657,7 +657,9 @@ function updateMkt(){
 }
 setInterval(clock,1000);clock();
 (function(){const el=document.getElementById("appver");
-  if(el&&window.APP_VERSION)el.textContent="v"+window.APP_VERSION;})();
+  if(el&&window.APP_VERSION){const v=String(window.APP_VERSION).trim();
+    // show the build number as a dotted version, e.g. 105 -> v1.0.5
+    el.textContent="v"+(/^\d+$/.test(v)?v.split("").join("."):v);}})();
 
 /* launch splash: fade out once the monitor first renders (min ~900ms, 6s fallback) */
 const splashStart=Date.now(); let splashDone=false;
