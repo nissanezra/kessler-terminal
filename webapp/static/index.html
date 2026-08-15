@@ -163,6 +163,10 @@
   .cmp-val{color:#cfcfcf;}
   .cmp-x{color:var(--dim);cursor:pointer;margin-left:5px;}
   .cmp-x:hover{color:var(--red);}
+  /* per-series date bar under the overlay chart: each line's own dates, in its color */
+  .cmp-datebar{display:flex;flex-wrap:wrap;gap:4px 18px;padding:4px 34px 2px 8px;
+    font-size:11.5px;min-height:16px;border-top:1px solid #1e1e1e;}
+  .cmp-dtseg{white-space:nowrap;font-weight:700;}
   /* ---- financials (FA) view ---- */
   #faview{padding:6px 12px;overflow:auto;height:calc(100vh - 30px);}
   .fa-stmt{margin:0 0 18px;}
@@ -507,6 +511,7 @@
     </div>
     <div class="legend" id="cmp-legend"></div>
     <div id="cmp-chart"></div>
+    <div id="cmp-datebar" class="cmp-datebar"></div>
   </div>
 
   <div id="faview" class="view">
@@ -916,6 +921,24 @@ function cmpAxisDate(t,short){
     return dt.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"UTC"});}
   return short?shortD(d):fmtD(d);
 }
+function cmpFmtDate(d,short){              // one axis value -> label (date, or intraday clock)
+  if(d==null)return"";
+  if(typeof d==="number"){const dt=new Date(d*1000);
+    return dt.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"UTC"});}
+  return short?shortD(d):fmtD(d);
+}
+/* bottom bar: each overlaid series' OWN dates, in its line color. j=hovered index
+   (show that series' date at the cursor); j=null -> show each series' full range. */
+function renderCmpDateBar(j){
+  const bar=document.getElementById("cmp-datebar"); if(!bar)return;
+  if(!cmpSeries.length){bar.innerHTML="";return;}
+  bar.innerHTML=cmpSeries.map(o=>{
+    const ds=o.dates||[]; let txt="";
+    if(j!=null&&ds[j]!=null)          txt=cmpFmtDate(ds[j],false);
+    else if(ds.length)                txt=cmpFmtDate(ds[0],true)+" → "+cmpFmtDate(ds[ds.length-1],true);
+    return `<span class="cmp-dtseg" style="color:${o.color}">${esc(o.entry.ticker)}: ${esc(txt)}</span>`;
+  }).join("");
+}
 function cmpDatesOf(price){                // per-resampled-point date lookup
   const M=price.length; if(M<2)return [];
   const out=[];
@@ -950,6 +973,7 @@ function getCmpChart(){
       const v=(j!=null&&o.vals&&o.vals[j]!=null)?o.vals[j]:o.lastVal;
       el.textContent=v!=null?cmpFmtVal(o,v):"";
     }
+    renderCmpDateBar(j);                    // each series' own date at the cursor, colored
   });
   return cmpChart;
 }
@@ -1022,7 +1046,7 @@ async function renderCompare(){
     const s=chart.addLineSeries(opts);
     s.setData(seriesData);
     const movePct=(vals&&vals.length>1&&vals[0])?(vals[vals.length-1]/vals[0]-1)*100:data[data.length-1].value;
-    const o={series:s,entry:e,vals,lastVal,rate};
+    const o={series:s,entry:e,vals,dates:r.dates,color,lastVal,rate};
     cmpSeries.push(o);
     const label=cmpMode==="tf"
       ? (e.tf==="CUSTOM"?`${e.ticker} ${shortD(e.from)}→${shortD(e.to)}`:`${e.ticker} ${e.tf}`)
@@ -1046,6 +1070,7 @@ async function renderCompare(){
   chart.priceScale("left").applyOptions({visible:overlay&&axisVals.includes("left")});
   chart.priceScale("right").applyOptions({visible:!overlay||axisVals.includes("right")});
   chart.timeScale().fitContent();
+  renderCmpDateBar(null);                   // each series' date range, colored, under the chart
   document.getElementById("cmp-title").textContent=
     overlay?"OVERLAY · actual values · L/R axes":`OVERLAY · ${cmpTf} · % change`;
 }
