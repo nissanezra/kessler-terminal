@@ -2285,12 +2285,17 @@ async def index(request):
     # their webview renders the ORIGINAL PDF natively), OFF on the cloud/phone app where
     # iOS won't embed a PDF reliably (there it keeps page-image rendering).
     native_pdf = not os.environ.get("MKT_PASSWORD")
+    try:                                               # build version (written by update.py)
+        app_version = (HERE.parent / ".appversion").read_text(encoding="utf-8").strip()
+    except Exception:
+        app_version = ""
     cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
-           "window.NATIVE_PDF=%s;</script>") % (
+           "window.NATIVE_PDF=%s;window.APP_VERSION=%s;</script>") % (
         "true" if os.environ.get("MKT_NO_PORT") else "false",
         "true" if local_tools else "false",
         json.dumps(share_to),
-        "true" if native_pdf else "false")
+        "true" if native_pdf else "false",
+        json.dumps(app_version))
     # security: on the gated cloud app, log every authenticated open under a stable
     # per-device cookie (name if known, else "unknown") with its browser + IP, so each
     # physical device shows up separately and any device that isn't Robert/Ezra stands out
@@ -2301,6 +2306,12 @@ async def index(request):
     page = page.replace("{{GREETING_NAME}}", html.escape(who or "", quote=True)) \
                .replace("{{APP_CONFIG}}", cfg)
     resp = web.Response(text=page, content_type="text/html")
+    # Never let the webview cache the shell: after an auto-update pulls a new index.html,
+    # a cached copy would keep showing old code even across relaunches (WebView2 reuses
+    # the same 127.0.0.1:8787 URL). Force a fresh fetch every launch.
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
     if not request.cookies.get("kkt_dev"):             # first visit: mint a device id
         resp.set_cookie("kkt_dev", dev_id, max_age=_COOKIE_MAXAGE, samesite="Lax")
     if request.query.get("u"):

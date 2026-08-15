@@ -424,6 +424,7 @@
   <div id="titlebar">
     <div class="tb-left">
       <span class="name">KESSLER-KATZNELSON TERMINAL</span>
+      <span id="appver" style="color:var(--dim);font-size:10px;font-weight:700;margin-left:6px"></span>
       <div id="cmdwrap">
         <input id="cmd" placeholder="Type ticker you want to search...  (e.g. AAPL)" autocomplete="off" />
         <button id="cmd-go" onclick="goCmd()">GO</button>
@@ -655,6 +656,8 @@ function updateMkt(){
   el.innerHTML='<span class="dot"></span>'+(open?"MARKET OPEN":"MARKET CLOSED");
 }
 setInterval(clock,1000);clock();
+(function(){const el=document.getElementById("appver");
+  if(el&&window.APP_VERSION)el.textContent="v"+window.APP_VERSION;})();
 
 /* launch splash: fade out once the monitor first renders (min ~900ms, 6s fallback) */
 const splashStart=Date.now(); let splashDone=false;
