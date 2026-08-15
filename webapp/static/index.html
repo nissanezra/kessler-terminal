@@ -934,21 +934,41 @@ function renderCmpDateBar(j){
   if(!cmpSeries.length){bar.innerHTML="";return;}
   bar.innerHTML=cmpSeries.map(o=>{
     const ds=o.dates||[]; let txt="";
-    if(j!=null&&ds[j]!=null)          txt=cmpFmtDate(ds[j],false);
-    else if(ds.length)                txt=cmpFmtDate(ds[0],true)+" → "+cmpFmtDate(ds[ds.length-1],true);
+    if(j!=null){                       // hovered: this series' date at the cursor (— if out of its range)
+      txt=ds[j]!=null?cmpFmtDate(ds[j],false):"—";
+    }else{                             // at rest: this series' own first→last real date
+      let a=null,b=null;
+      for(let k=0;k<ds.length;k++){if(ds[k]!=null){a=ds[k];break;}}
+      for(let k=ds.length-1;k>=0;k--){if(ds[k]!=null){b=ds[k];break;}}
+      if(a!=null)txt=cmpFmtDate(a,true)+" → "+cmpFmtDate(b,true);
+    }
     return `<span class="cmp-dtseg" style="color:${o.color}">${esc(o.entry.ticker)}: ${esc(txt)}</span>`;
   }).join("");
 }
-function cmpDatesOf(price){                // per-resampled-point date lookup
-  const M=price.length; if(M<2)return [];
-  const out=[];
-  for(let j=0;j<CMP_N;j++)out.push(price[Math.round(j/(CMP_N-1)*(M-1))].time);
-  return out;
+/* interpolate ONE series onto a shared numeric time grid (ms). Points outside the
+   series' own range stay null (a gap), so lines align by REAL date across series. */
+function cmpSampleGrid(price, gridMs){
+  const N=gridMs.length, vals=new Array(N).fill(null), dates=new Array(N).fill(null);
+  const pts=[]; for(const p of price) if(p.value!=null)
+    pts.push({t:timeToDate(p.time).getTime(), v:p.value});
+  if(pts.length<2)return{vals,dates};
+  const t0=pts[0].t, t1=pts[pts.length-1].t, numTime=(typeof price.find(p=>p.value!=null).time==="number");
+  let i=0;
+  for(let j=0;j<N;j++){
+    const g=gridMs[j];
+    if(g<t0||g>t1)continue;                 // this series doesn't cover this date -> gap
+    while(i<pts.length-1&&pts[i+1].t<g)i++;
+    const a=pts[i], b=pts[Math.min(i+1,pts.length-1)];
+    vals[j]=(b.t===a.t)?a.v:a.v+(b.v-a.v)*(g-a.t)/(b.t-a.t);
+    dates[j]=numTime?Math.round(g/1000):new Date(g).toISOString().slice(0,10);
+  }
+  return{vals,dates};
 }
-function cmpValsOf(price){                 // per-resampled-point RAW value (price/yield)
-  const M=price.length; if(M<2)return [];
-  const out=[];
-  for(let j=0;j<CMP_N;j++)out.push(price[Math.round(j/(CMP_N-1)*(M-1))].value);
+function cmpRebaseGrid(vals){              // % change vs first in-range point -> [{time:j,value}]
+  let base=null; for(const v of vals){if(v!=null){base=v;break;}}
+  const out=[]; if(!base)return out;
+  for(let j=0;j<vals.length;j++) if(vals[j]!=null)
+    out.push({time:j,value:Math.round((vals[j]/base-1)*10000)/100});
   return out;
 }
 function cmpFmtVal(o,v){ return o.rate?v.toFixed(2)+"%":fmtCmpVal(v); }
@@ -980,15 +1000,6 @@ function getCmpChart(){
 function fmtCmpVal(v){                // absolute price next to the % in the legend
   const a=Math.abs(v), dec=a>=1000?0:a>=1?2:4;
   return v.toLocaleString(undefined,{minimumFractionDigits:dec,maximumFractionDigits:dec});}
-function cmpRebase(price){            // -> % change vs first point, resampled to CMP_N
-  const M=price.length; if(M<2)return [];
-  const v0=price[0].value, pct=price.map(p=>(p.value/v0-1)*100), out=[];
-  for(let j=0;j<CMP_N;j++){
-    const f=j/(CMP_N-1)*(M-1), lo=Math.floor(f), hi=Math.ceil(f), w=f-lo;
-    out.push({time:j, value:Math.round((pct[lo]*(1-w)+pct[hi]*w)*100)/100});
-  }
-  return out;
-}
 let cmpGen=0;
 async function renderCompare(){
   const gen=++cmpGen;                                  // only the latest render commits
@@ -999,14 +1010,29 @@ async function renderCompare(){
         ? `/api/chart?ticker=${encodeURIComponent(e.ticker)}&from=${e.from}&to=${e.to}`
         : `/api/chart?ticker=${encodeURIComponent(e.ticker)}&tf=${e.tf}`;
       const d=await(await fetch(url)).json();
-      const price=d.price||[];
-      return {e, data:cmpRebase(price), dates:cmpDatesOf(price), vals:cmpValsOf(price),
-              lastVal:price.length?price[price.length-1].value:null, rate:!!d.rate}; }
-    catch(_){ return {e, data:[]}; }
+      return {e, price:(d.price||[]), rate:!!d.rate}; }
+    catch(_){ return {e, price:[], rate:false}; }
   }));
   if(gen!==cmpGen)return;                              // superseded by a newer render (its own badge stays up)
   setLoading(false);
-  cmpDateAxis=(results.find(r=>r.dates&&r.dates.length)||{}).dates||[];
+  // Build ONE shared time grid spanning every series' combined range, then interpolate
+  // each series onto it. A given x is now the SAME real date for all lines, so series
+  // with different windows align by date (a shorter one just starts partway across).
+  const withData=results.filter(r=>r.price&&r.price.length>=2);
+  let tMin=Infinity,tMax=-Infinity;
+  for(const r of withData){
+    tMin=Math.min(tMin,timeToDate(r.price[0].time).getTime());
+    tMax=Math.max(tMax,timeToDate(r.price[r.price.length-1].time).getTime());
+  }
+  const numTime=withData.length&&typeof withData[0].price[0].time==="number";
+  const gridMs=[]; for(let j=0;j<CMP_N;j++) gridMs.push(withData.length?tMin+(tMax-tMin)*j/(CMP_N-1):0);
+  cmpDateAxis=withData.length?gridMs.map(g=>numTime?Math.round(g/1000):new Date(g).toISOString().slice(0,10)):[];
+  for(const r of results){
+    const g=cmpSampleGrid(r.price||[],gridMs);
+    r.vals=g.vals; r.dates=g.dates; r.data=cmpRebaseGrid(g.vals);
+    let lv=null; for(let k=g.vals.length-1;k>=0;k--){if(g.vals[k]!=null){lv=g.vals[k];break;}}
+    r.lastVal=lv;
+  }
   const chart=getCmpChart();
   // fresh formatter identity each render: the tick positions (0..239) never change
   // between compares, so without this the library reuses CACHED labels drawn from
@@ -1045,7 +1071,8 @@ async function renderCompare(){
     }
     const s=chart.addLineSeries(opts);
     s.setData(seriesData);
-    const movePct=(vals&&vals.length>1&&vals[0])?(vals[vals.length-1]/vals[0]-1)*100:data[data.length-1].value;
+    let base=null; for(const v of vals){if(v!=null){base=v;break;}}   // first in-range value
+    const movePct=(base&&lastVal!=null)?(lastVal/base-1)*100:(data.length?data[data.length-1].value:0);
     const o={series:s,entry:e,vals,dates:r.dates,color,lastVal,rate};
     cmpSeries.push(o);
     const label=cmpMode==="tf"
@@ -1054,8 +1081,8 @@ async function renderCompare(){
     const valStr=lastVal!=null?` <span class="cmp-val" id="cmp-val-${e._id}">${cmpFmtVal(o,lastVal)}</span>`:"";
     // rates in the real-value overlay: show the move in points, not a % change (0.06%→3.63% isn't "+5950%")
     let moveStr;
-    if(overlay&&rate&&vals&&vals.length>1){
-      const d=vals[vals.length-1]-vals[0];
+    if(overlay&&rate&&base!=null&&lastVal!=null){
+      const d=lastVal-base;
       moveStr=`<span class="${d>=0?'up':'down'}">${d>=0?'+':''}${d.toFixed(2)} pts</span>`;
     }else{
       moveStr=`<span class="${movePct>=0?'up':'down'}">${movePct>=0?'+':''}${movePct.toFixed(1)}%</span>`;
@@ -1069,7 +1096,11 @@ async function renderCompare(){
   const axisVals=[...axis.values()];
   chart.priceScale("left").applyOptions({visible:overlay&&axisVals.includes("left")});
   chart.priceScale("right").applyOptions({visible:!overlay||axisVals.includes("right")});
-  chart.timeScale().fitContent();
+  // Fit now, then again on the next frames: if the view was just shown, the chart's
+  // width can still be 0 on this tick, which would pin barSpacing at its minimum and
+  // squish everything to the right. Refitting after layout settles corrects it.
+  const fit=()=>chart.timeScale().fitContent();
+  fit(); requestAnimationFrame(()=>{ fit(); requestAnimationFrame(fit); });
   renderCmpDateBar(null);                   // each series' date range, colored, under the chart
   document.getElementById("cmp-title").textContent=
     overlay?"OVERLAY · actual values · L/R axes":`OVERLAY · ${cmpTf} · % change`;
