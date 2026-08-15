@@ -1130,14 +1130,26 @@ function setCmpTf(tf){ cmpTf=tf; cmpList=cmpList.map(e=>({_id:e._id,ticker:e.tic
 const cmpKey=e=>`${e.ticker}|${e.tf}|${e.from||""}|${e.to||""}`;
 function addCompareEntry(){
   const t=document.getElementById("cmp-add-ticker").value.trim().toUpperCase(); if(!t)return;
-  let entry;
-  if(cmpMode==="tf" && document.getElementById("cmp-add-tf").value==="CUSTOM"){
-    const f=document.getElementById("cmp-add-from").value, to=document.getElementById("cmp-add-to").value;
-    if(!f||!to){alert("Pick both dates");return;}
-    entry={ticker:t,tf:"CUSTOM",from:(f<=to?f:to),to:(f<=to?to:f)};
-  }else{
-    entry={ticker:t,tf:cmpMode==="tf"?document.getElementById("cmp-add-tf").value:cmpTf};
+  if(cmpMode==="tf"){
+    // The date controls set a SHARED window for the WHOLE overlay: every series spans
+    // the same range, so all lines fill the width and align (nothing shrinks to a sliver
+    // when you add a ticker with a longer/shorter range than the ones already shown).
+    let win;
+    if(document.getElementById("cmp-add-tf").value==="CUSTOM"){
+      const f=document.getElementById("cmp-add-from").value, to=document.getElementById("cmp-add-to").value;
+      if(!f||!to){alert("Pick both dates");return;}
+      win={tf:"CUSTOM",from:(f<=to?f:to),to:(f<=to?to:f)};
+    }else{
+      win={tf:document.getElementById("cmp-add-tf").value};
+    }
+    document.getElementById("cmp-add-ticker").value="";
+    if(cmpList.some(e=>e.ticker===t)||cmpList.length>=8)return;
+    cmpList=cmpList.map(e=>({_id:e._id,ticker:e.ticker,...win}));   // re-window existing series
+    cmpList.push({_id:++cmpIdSeq,ticker:t,...win});
+    if(win.tf==="CUSTOM")cmpDefaultCustom={from:win.from,to:win.to};
+    renderCompare(); return;
   }
+  const entry={ticker:t,tf:cmpTf};                                   // % change mode: shared tf bar
   document.getElementById("cmp-add-ticker").value="";
   if(cmpList.some(e=>cmpKey(e)===cmpKey(entry))||cmpList.length>=8)return;
   entry._id=++cmpIdSeq; cmpList.push(entry); renderCompare();
