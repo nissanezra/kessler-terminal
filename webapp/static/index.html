@@ -446,6 +446,7 @@
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
       <button class="navbtn" onclick="showNews(null)">NEWS</button>
       <button class="navbtn" onclick="showTopBond()">TOP BOND</button>
+      <button class="navbtn" onclick="showOptionsNav()">OPTIONS</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn" onclick="showShared()">SHARED</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
@@ -537,8 +538,11 @@
 
   <div id="optview" class="view" style="padding:6px 12px;">
     <div class="chart-top">
-      <button class="btn" onclick="optBack()">← Back</button>
+      <button class="btn" onclick="showMonitor()">← Monitor</button>
       <span class="ctitle" id="opt-title">OPTIONS</span>
+      <input id="opt-tk" class="cmp-input" style="width:78px;text-transform:uppercase;margin-left:8px"
+             placeholder="ticker" autocomplete="off"
+             onkeydown="if(event.key==='Enter')showOptions(this.value.trim().toUpperCase())">
       <span id="opt-under" class="dim" style="margin-left:10px"></span>
       <div class="tfbar" id="opt-exps" style="margin-left:auto;flex-wrap:wrap"></div>
     </div>
@@ -1245,9 +1249,12 @@ function optSetupMsg(d){
       : `Run <code>python schwab_md.py login</code> once to sign in to Schwab.`)+
     `<br><br>Read-only Market Data only — no account access, no trading.</div>`;
 }
+function showOptionsNav(){ showOptions(optState.ticker||"GDX"); }   // main-bar OPTIONS -> last, else GDX
 async function showOptions(ticker){
+  if(!ticker)return;
   optState.ticker=ticker; show("optview");
   document.getElementById("opt-title").textContent=`${ticker} — OPTIONS`;
+  const tk=document.getElementById("opt-tk"); if(tk&&document.activeElement!==tk)tk.value=ticker;
   document.getElementById("opt-under").textContent="";
   document.getElementById("opt-exps").innerHTML="";
   document.getElementById("opt-body").innerHTML="<p class='dim'>Loading option chain…</p>";
