@@ -281,7 +281,8 @@ async def api_chart(request):
     # (or refresh) today's point from the live quote. Weekdays only; stocks/ETFs/index
     # proxies (fetch the live quote for the charted symbol, scaled for index proxies).
     if (tf not in ("1D", "CUSTOM") and price and not td.is_crypto(ticker)
-            and datetime.now().weekday() < 5):
+            and not td.resolve_fred(ticker)          # FRED series (CCC/HY/IG OAS, breakevens…):
+            and datetime.now().weekday() < 5):       # the same symbol is a different instrument
         _idx = td.resolve_index(ticker)
         if _idx and _idx[0] == "proxy":
             live_sym, lscale = _idx[1], (_idx[3] if len(_idx) > 3 else 1)
