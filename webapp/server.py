@@ -283,13 +283,16 @@ async def api_chart(request):
     if (tf not in ("1D", "CUSTOM") and price and not td.is_crypto(ticker)
             and not td.resolve_fred(ticker)          # FRED series (CCC/HY/IG OAS, breakevens…):
             and datetime.now().weekday() < 5):       # the same symbol is a different instrument
-        _idx = td.resolve_index(ticker)
-        if _idx and _idx[0] == "proxy":
-            live_sym, lscale = _idx[1], (_idx[3] if len(_idx) > 3 else 1)
-        elif not _idx:
-            live_sym, lscale = ticker, 1
+        if proxy:                                    # commodity charted via its ETF -> quote the ETF
+            live_sym, lscale = proxy[0], 1           #   (GLD ~300, NOT the @GC.1 future ~4400)
         else:
-            live_sym, lscale = None, 1          # nasdaq index: leave as-is
+            _idx = td.resolve_index(ticker)
+            if _idx and _idx[0] == "proxy":
+                live_sym, lscale = _idx[1], (_idx[3] if len(_idx) > 3 else 1)
+            elif not _idx:
+                live_sym, lscale = ticker, 1
+            else:
+                live_sym, lscale = None, 1          # nasdaq index: leave as-is
         if live_sym:
             try:
                 _f = await td.fetch_fundamentals(s, live_sym)
