@@ -950,30 +950,26 @@ function renderCmpDateBar(j){
     return `<span class="cmp-dtseg" style="color:${o.color}">${esc(o.entry.ticker)}: ${esc(txt)}</span>`;
   }).join("");
 }
-/* interpolate ONE series onto a shared numeric time grid (ms). Points outside the
-   series' own range stay null (a gap), so lines align by REAL date across series. */
-function cmpSampleGrid(price, gridMs){
-  const N=gridMs.length, vals=new Array(N).fill(null), dates=new Array(N).fill(null);
-  const pts=[]; for(const p of price) if(p.value!=null)
-    pts.push({t:timeToDate(p.time).getTime(), v:p.value});
-  if(pts.length<2)return{vals,dates};
-  const t0=pts[0].t, t1=pts[pts.length-1].t, numTime=(typeof price.find(p=>p.value!=null).time==="number");
-  let i=0;
-  for(let j=0;j<N;j++){
-    const g=gridMs[j];
-    if(g<t0||g>t1)continue;                 // this series doesn't cover this date -> gap
-    while(i<pts.length-1&&pts[i+1].t<g)i++;
-    const a=pts[i], b=pts[Math.min(i+1,pts.length-1)];
-    vals[j]=(b.t===a.t)?a.v:a.v+(b.v-a.v)*(g-a.t)/(b.t-a.t);
-    dates[j]=numTime?Math.round(g/1000):new Date(g).toISOString().slice(0,10);
-  }
-  return{vals,dates};
+/* Resample a series to CMP_N points by its OWN index, so every line is stretched to the
+   FULL width regardless of its date range. This lets you overlay DIFFERENT periods — each
+   ticker keeps its own dates; the legend + date bar show each line's real window. */
+function cmpDatesOf(price){
+  const M=price.length; if(M<2)return [];
+  const out=[]; for(let j=0;j<CMP_N;j++) out.push(price[Math.round(j/(CMP_N-1)*(M-1))].time);
+  return out;
 }
-function cmpRebaseGrid(vals){              // % change vs first in-range point -> [{time:j,value}]
-  let base=null; for(const v of vals){if(v!=null){base=v;break;}}
-  const out=[]; if(!base)return out;
-  for(let j=0;j<vals.length;j++) if(vals[j]!=null)
-    out.push({time:j,value:Math.round((vals[j]/base-1)*10000)/100});
+function cmpValsOf(price){
+  const M=price.length; if(M<2)return [];
+  const out=[]; for(let j=0;j<CMP_N;j++) out.push(price[Math.round(j/(CMP_N-1)*(M-1))].value);
+  return out;
+}
+function cmpRebase(price){                 // % change vs first point -> [{time:j,value}]
+  const M=price.length; if(M<2)return [];
+  const v0=price[0].value, pct=price.map(p=>(p.value/v0-1)*100), out=[];
+  for(let j=0;j<CMP_N;j++){
+    const f=j/(CMP_N-1)*(M-1), lo=Math.floor(f), hi=Math.ceil(f), w=f-lo;
+    out.push({time:j, value:Math.round((pct[lo]*(1-w)+pct[hi]*w)*100)/100});
+  }
   return out;
 }
 function cmpFmtVal(o,v){ return o.rate?v.toFixed(2)+"%":fmtCmpVal(v); }
@@ -1020,24 +1016,15 @@ async function renderCompare(){
   }));
   if(gen!==cmpGen)return;                              // superseded by a newer render (its own badge stays up)
   setLoading(false);
-  // Build ONE shared time grid spanning every series' combined range, then interpolate
-  // each series onto it. A given x is now the SAME real date for all lines, so series
-  // with different windows align by date (a shorter one just starts partway across).
-  const withData=results.filter(r=>r.price&&r.price.length>=2);
-  let tMin=Infinity,tMax=-Infinity;
-  for(const r of withData){
-    tMin=Math.min(tMin,timeToDate(r.price[0].time).getTime());
-    tMax=Math.max(tMax,timeToDate(r.price[r.price.length-1].time).getTime());
-  }
-  const numTime=withData.length&&typeof withData[0].price[0].time==="number";
-  const gridMs=[]; for(let j=0;j<CMP_N;j++) gridMs.push(withData.length?tMin+(tMax-tMin)*j/(CMP_N-1):0);
-  cmpDateAxis=withData.length?gridMs.map(g=>numTime?Math.round(g/1000):new Date(g).toISOString().slice(0,10)):[];
+  // Each series is stretched to full width by its own index, so tickers with DIFFERENT
+  // date ranges are both drawn edge-to-edge (compare periods). Each keeps its own dates;
+  // the date bar under the chart labels each line's real window.
   for(const r of results){
-    const g=cmpSampleGrid(r.price||[],gridMs);
-    r.vals=g.vals; r.dates=g.dates; r.data=cmpRebaseGrid(g.vals);
-    let lv=null; for(let k=g.vals.length-1;k>=0;k--){if(g.vals[k]!=null){lv=g.vals[k];break;}}
-    r.lastVal=lv;
+    const price=r.price||[];
+    r.vals=cmpValsOf(price); r.dates=cmpDatesOf(price); r.data=cmpRebase(price);
+    r.lastVal=price.length?price[price.length-1].value:null;
   }
+  cmpDateAxis=(results.find(r=>r.dates&&r.dates.length)||{}).dates||[];
   const chart=getCmpChart();
   // fresh formatter identity each render: the tick positions (0..239) never change
   // between compares, so without this the library reuses CACHED labels drawn from
@@ -1135,26 +1122,17 @@ function setCmpTf(tf){ cmpTf=tf; cmpList=cmpList.map(e=>({_id:e._id,ticker:e.tic
 const cmpKey=e=>`${e.ticker}|${e.tf}|${e.from||""}|${e.to||""}`;
 function addCompareEntry(){
   const t=document.getElementById("cmp-add-ticker").value.trim().toUpperCase(); if(!t)return;
-  if(cmpMode==="tf"){
-    // The date controls set a SHARED window for the WHOLE overlay: every series spans
-    // the same range, so all lines fill the width and align (nothing shrinks to a sliver
-    // when you add a ticker with a longer/shorter range than the ones already shown).
-    let win;
-    if(document.getElementById("cmp-add-tf").value==="CUSTOM"){
-      const f=document.getElementById("cmp-add-from").value, to=document.getElementById("cmp-add-to").value;
-      if(!f||!to){alert("Pick both dates");return;}
-      win={tf:"CUSTOM",from:(f<=to?f:to),to:(f<=to?to:f)};
-    }else{
-      win={tf:document.getElementById("cmp-add-tf").value};
-    }
-    document.getElementById("cmp-add-ticker").value="";
-    if(cmpList.some(e=>e.ticker===t)||cmpList.length>=8)return;
-    cmpList=cmpList.map(e=>({_id:e._id,ticker:e.ticker,...win}));   // re-window existing series
-    cmpList.push({_id:++cmpIdSeq,ticker:t,...win});
-    if(win.tf==="CUSTOM")cmpDefaultCustom={from:win.from,to:win.to};
-    renderCompare(); return;
+  let entry;
+  // Each ticker keeps its OWN date range — adding one never re-windows the others, so you
+  // can overlay different periods (e.g. SPX 2006-2008 vs DOW today). Each line is drawn
+  // full-width; the date bar shows each one's real dates.
+  if(cmpMode==="tf" && document.getElementById("cmp-add-tf").value==="CUSTOM"){
+    const f=document.getElementById("cmp-add-from").value, to=document.getElementById("cmp-add-to").value;
+    if(!f||!to){alert("Pick both dates");return;}
+    entry={ticker:t,tf:"CUSTOM",from:(f<=to?f:to),to:(f<=to?to:f)};
+  }else{
+    entry={ticker:t,tf:cmpMode==="tf"?document.getElementById("cmp-add-tf").value:cmpTf};
   }
-  const entry={ticker:t,tf:cmpTf};                                   // % change mode: shared tf bar
   document.getElementById("cmp-add-ticker").value="";
   if(cmpList.some(e=>cmpKey(e)===cmpKey(entry))||cmpList.length>=8)return;
   entry._id=++cmpIdSeq; cmpList.push(entry); renderCompare();
