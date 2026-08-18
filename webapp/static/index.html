@@ -179,6 +179,17 @@
   .fa-val{color:var(--white);} .fa-val.amber{color:var(--amber);} .fa-val.dim{color:var(--dim);}
   .fa-tab .clk{cursor:pointer;} .fa-tab .clk:hover{text-decoration:underline;}
   .fa-tab .fa-rowlab.fcf,.fa-tab .fa-val.fcf{color:#34c3d6;font-weight:700;}
+  /* ---- options chain (montage) ---- */
+  .opt-wrap{overflow:auto;max-height:calc(100vh - 120px);}
+  .opt-tab{border-collapse:collapse;font-size:11.5px;width:100%;white-space:nowrap;}
+  .opt-tab th{position:sticky;top:0;background:#0e0e0e;color:#999;font-weight:700;padding:3px 8px;text-align:right;z-index:1;}
+  .opt-tab th.side{color:var(--amber);text-align:center;letter-spacing:.05em;}
+  .opt-tab td{padding:2px 8px;text-align:right;color:var(--white);border-bottom:1px solid #151515;}
+  .opt-tab td.dim{color:#555;}
+  .opt-tab .opt-strike{color:var(--yellow);font-weight:700;text-align:center;background:#0e0e0e;}
+  .opt-tab .opt-strike.atm{background:#241f10;}
+  .opt-setup{color:var(--dim);font-size:13px;line-height:1.7;max-width:660px;margin:26px auto;text-align:center;}
+  .opt-setup code{color:var(--amber);background:#141414;padding:1px 5px;border-radius:3px;font-size:12px;}
   .fa-src{color:var(--dim);font-size:11px;margin:10px 0 20px;max-width:900px;line-height:1.5;}
   /* ---- portfolio (PORT) view ---- */
   #portview{padding:8px 14px;overflow:auto;height:calc(100vh - 30px);}
@@ -458,6 +469,7 @@
       <button class="btn" data-mbtn="sec-chart" onclick="toggleMeasure('sec-chart')">Measure</button>
       <button class="btn" onclick="overlayFromChart('security')">Overlay</button>
       <button class="btn" onclick="showFinancials(state.security.ticker)">Financials</button>
+      <button class="btn" onclick="showOptions(state.security.ticker)">Options</button>
       <button class="btn navbtn-brief" id="sec-ai-btn" onclick="toggleAskAI()">✦ Ask AI</button>
     </div>
     <div id="sec-ai" class="sec-ai">
@@ -521,6 +533,16 @@
       <span class="ctitle" id="fa-title">FINANCIALS</span>
     </div>
     <div id="fa-body"></div>
+  </div>
+
+  <div id="optview" class="view" style="padding:6px 12px;">
+    <div class="chart-top">
+      <button class="btn" onclick="optBack()">← Back</button>
+      <span class="ctitle" id="opt-title">OPTIONS</span>
+      <span id="opt-under" class="dim" style="margin-left:10px"></span>
+      <div class="tfbar" id="opt-exps" style="margin-left:auto;flex-wrap:wrap"></div>
+    </div>
+    <div id="opt-body"></div>
   </div>
 
   <div id="portview" class="view">
@@ -1208,6 +1230,63 @@ function faHoldingsTable(title,headers,rows,src){
   return h+`</table></div><p class="fa-src">${esc(src)}</p>`;
 }
 function faBack(){ if(faTicker)showSecurity(faTicker); else showMonitor(); }
+
+/* ---- options chain (Schwab read-only Market Data) ---- */
+let optState={ticker:null, chain:null, exp:null};
+function optBack(){ showSecurity(optState.ticker||state.security.ticker); }
+function optExpLabel(iso){ const p=iso.split("-"); return `${MON[+p[1]-1]} ${+p[2]} '${p[0].slice(2)}`; }
+function optC(v,dec){ return (v==null)?'<td class="dim">–</td>':`<td>${(+v).toFixed(dec)}</td>`; }
+function optN(v){ return (v==null)?'<td class="dim">–</td>':`<td>${(+v).toLocaleString()}</td>`; }
+function optSetupMsg(d){
+  return `<div class="opt-setup"><b>Schwab options aren't set up on this machine yet.</b><br><br>`+
+    (d.need_creds
+      ? `Put your Schwab <b>App Key</b> and <b>Secret</b> in <code>~/markets-dashboard/.schwab_md_creds</code> `+
+        `(line 1 = App Key, line 2 = Secret), then run <code>python schwab_md.py login</code> once.`
+      : `Run <code>python schwab_md.py login</code> once to sign in to Schwab.`)+
+    `<br><br>Read-only Market Data only — no account access, no trading.</div>`;
+}
+async function showOptions(ticker){
+  optState.ticker=ticker; show("optview");
+  document.getElementById("opt-title").textContent=`${ticker} — OPTIONS`;
+  document.getElementById("opt-under").textContent="";
+  document.getElementById("opt-exps").innerHTML="";
+  document.getElementById("opt-body").innerHTML="<p class='dim'>Loading option chain…</p>";
+  let d; try{ d=await(await fetch(`/api/options?ticker=${encodeURIComponent(ticker)}`)).json(); }
+  catch(e){ document.getElementById("opt-body").innerHTML="<p class='dim'>Couldn't load options.</p>"; return; }
+  if(optState.ticker!==ticker)return;
+  if(!d.configured){ document.getElementById("opt-body").innerHTML=optSetupMsg(d); return; }
+  if(d.error){ document.getElementById("opt-body").innerHTML=`<p class='dim'>Schwab error: ${esc(d.error)}</p>`; return; }
+  if(!d.expirations||!d.expirations.length){ document.getElementById("opt-body").innerHTML=`<p class='dim'>No options listed for ${esc(ticker)}.</p>`; return; }
+  optState.chain=d; optState.exp=d.expirations[0].exp;
+  document.getElementById("opt-under").textContent=
+    `underlying ${d.underlyingPrice!=null?fmtV(d.underlyingPrice):"?"} · ${d.isDelayed?"delayed":"live"}`;
+  renderOptExps(); renderOptChain();
+}
+function renderOptExps(){
+  document.getElementById("opt-exps").innerHTML=optState.chain.expirations.map(e=>
+    `<button class="tf ${e.exp===optState.exp?'active':''}" onclick="setOptExp('${e.exp}')">${optExpLabel(e.exp)}</button>`).join("");
+}
+function setOptExp(exp){ optState.exp=exp; renderOptExps(); renderOptChain(); }
+function renderOptChain(){
+  const e=optState.chain.expirations.find(x=>x.exp===optState.exp); if(!e)return;
+  const by={}; e.calls.forEach(c=>{(by[c.strike]=by[c.strike]||{}).c=c;});
+  e.puts.forEach(p=>{(by[p.strike]=by[p.strike]||{}).p=p;});
+  const strikes=Object.keys(by).map(Number).sort((a,b)=>a-b);
+  const up=optState.chain.underlyingPrice;
+  const atm=(up!=null&&strikes.length)?strikes.reduce((a,b)=>Math.abs(b-up)<Math.abs(a-up)?b:a):null;
+  const hd=x=>`<th>${x}</th>`;
+  let h=`<div class="opt-wrap"><table class="opt-tab"><thead>`+
+    `<tr><th colspan="6" class="side">CALLS</th><th class="opt-strike">STRIKE</th><th colspan="6" class="side">PUTS</th></tr>`+
+    `<tr>`+["Bid","Ask","Last","IV%","Δ","OI"].map(hd).join("")+`<th class="opt-strike"></th>`+
+    ["Bid","Ask","Last","IV%","Δ","OI"].map(hd).join("")+`</tr></thead><tbody>`;
+  for(const k of strikes){
+    const c=by[k].c||{}, p=by[k].p||{};
+    h+=`<tr>`+optC(c.bid,2)+optC(c.ask,2)+optC(c.last,2)+optC(c.iv,1)+optC(c.delta,2)+optN(c.oi)+
+      `<td class="opt-strike${k===atm?' atm':''}">${(k%1?k.toFixed(2):k)}</td>`+
+      optC(p.bid,2)+optC(p.ask,2)+optC(p.last,2)+optC(p.iv,1)+optC(p.delta,2)+optN(p.oi)+`</tr>`;
+  }
+  document.getElementById("opt-body").innerHTML=h+`</tbody></table></div>`;
+}
 
 /* ---- portfolio (PORT) ---- */
 async function showPortfolio(){
@@ -1944,6 +2023,7 @@ function run(raw){
   if(["GP","CHART","G"].includes(fn)){const tf=rest.find(x=>TFS.includes(x))||"1Y";return showChart(ticker,tf);}
   if(["N"].includes(fn))return showNews(ticker);
   if(["FA","FIN"].includes(fn))return showFinancials(ticker);
+  if(["OPT","OPTION","OPTIONS"].includes(fn))return showOptions(ticker);
   return showSecurity(ticker);
 }
 const cmdEl=document.getElementById("cmd");

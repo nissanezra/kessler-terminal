@@ -30,6 +30,10 @@ sys.path.insert(0, str(HERE.parent))          # import sibling modules
 
 import dashboard as dash       # noqa: E402
 import terminal_data as td     # noqa: E402
+try:                           # read-only Schwab market data (option chains); optional
+    import schwab_md as smd    # noqa: E402
+except Exception:
+    smd = None
 
 
 # ---- Gemini API key (AI summaries) -----------------------------------------
@@ -394,6 +398,23 @@ async def api_security(request):
         "description": description,                        # business/fund profile (stocks/ETFs)
         "commodity": ({"etf": prox[0], "name": prox[1]} if prox else None),
     })
+
+
+async def api_options(request):
+    """Full option chain (calls+puts, all expirations, greeks/IV/OI) for a ticker,
+    from Schwab's READ-ONLY Market Data API. Returns configured:false until the one-time
+    Schwab login is done, so the frontend can show a friendly 'set up' message."""
+    ticker = request.query.get("ticker", "GDX").upper()
+    if not smd or not smd.is_configured():
+        return web.json_response({"configured": False,
+                                  "need_creds": not (smd and smd.have_creds())})
+    s = request.app["session"]
+    try:
+        chain = await smd.get_option_chain(s, ticker)
+        chain["configured"] = True
+        return web.json_response(chain)
+    except Exception as e:
+        return web.json_response({"configured": True, "error": str(e)[:200]}, status=502)
 
 
 # ---- symbol search: company name -> ticker suggestions -------------------
@@ -2294,12 +2315,13 @@ async def index(request):
     except Exception:
         app_version = ""
     cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
-           "window.NATIVE_PDF=%s;window.APP_VERSION=%s;</script>") % (
+           "window.NATIVE_PDF=%s;window.APP_VERSION=%s;window.OPTIONS_READY=%s;</script>") % (
         "true" if os.environ.get("MKT_NO_PORT") else "false",
         "true" if local_tools else "false",
         json.dumps(share_to),
         "true" if native_pdf else "false",
-        json.dumps(app_version))
+        json.dumps(app_version),
+        "true" if (smd and smd.is_configured()) else "false")   # Schwab options wired up here?
     # security: on the gated cloud app, log every authenticated open under a stable
     # per-device cookie (name if known, else "unknown") with its browser + IP, so each
     # physical device shows up separately and any device that isn't Robert/Ezra stands out
@@ -2464,6 +2486,7 @@ def make_app():
     app.router.add_get("/api/security", api_security)
     app.router.add_get("/api/symsearch", api_symsearch)
     app.router.add_get("/api/financials", api_financials)
+    app.router.add_get("/api/options", api_options)
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)
     app.router.add_get("/api/news_board", api_news_board)

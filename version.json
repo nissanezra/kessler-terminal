@@ -1,5 +1,5 @@
 {
-  "version": 109,
+  "version": 110,
   "files": [
     "terminal.py",
     "dashboard.py",
@@ -7,6 +7,7 @@
     "chart_render.py",
     "update.py",
     "rosenberg.py",
+    "schwab_md.py",
     "appname.txt",
     "webapp/server.py",
     "webapp/app.py",
