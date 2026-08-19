@@ -179,17 +179,27 @@
   .fa-val{color:var(--white);} .fa-val.amber{color:var(--amber);} .fa-val.dim{color:var(--dim);}
   .fa-tab .clk{cursor:pointer;} .fa-tab .clk:hover{text-decoration:underline;}
   .fa-tab .fa-rowlab.fcf,.fa-tab .fa-val.fcf{color:#34c3d6;font-weight:700;}
-  /* ---- options chain (montage) ---- */
-  .opt-wrap{overflow:auto;max-height:calc(100vh - 120px);}
-  .opt-tab{border-collapse:collapse;font-size:11.5px;width:100%;white-space:nowrap;}
-  .opt-tab th{position:sticky;top:0;background:#0e0e0e;color:#999;font-weight:700;padding:3px 8px;text-align:right;z-index:1;}
-  .opt-tab th.side{color:var(--amber);text-align:center;letter-spacing:.05em;}
-  .opt-tab td{padding:2px 8px;text-align:right;color:var(--white);border-bottom:1px solid #151515;}
-  .opt-tab td.dim{color:#555;}
-  .opt-tab .opt-strike{color:var(--yellow);font-weight:700;text-align:center;background:#0e0e0e;}
-  .opt-tab .opt-strike.atm{background:#241f10;}
-  .opt-setup{color:var(--dim);font-size:13px;line-height:1.7;max-width:660px;margin:26px auto;text-align:center;}
-  .opt-setup code{color:var(--amber);background:#141414;padding:1px 5px;border-radius:3px;font-size:12px;}
+  /* ---- options chain (CALLS only, sized for readability) ---- */
+  .opt-under{margin-left:12px;color:var(--white);font-size:15px;font-weight:700;}
+  .opt-explabel{color:var(--dim);font-size:13px;margin:10px 2px 2px;}
+  .opt-exps{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 12px;}
+  .opt-exps button{background:#161616;border:1px solid #3a3a3a;color:var(--amber);
+    font-family:var(--mono);font-size:15px;font-weight:700;padding:10px 16px;border-radius:7px;cursor:pointer;}
+  .opt-exps button:hover{border-color:var(--amber);}
+  .opt-exps button.active{background:var(--amber);color:#000;border-color:var(--amber);}
+  .opt-wrap{overflow:auto;max-height:calc(100vh - 210px);border:1px solid #1e1e1e;border-radius:6px;}
+  .opt-tab{border-collapse:collapse;font-size:15px;width:100%;white-space:nowrap;}
+  .opt-tab th{position:sticky;top:0;background:#111;color:#bbb;font-weight:700;padding:9px 16px;
+    text-align:right;z-index:1;letter-spacing:.04em;border-bottom:2px solid #2a2a2a;}
+  .opt-tab th.opt-strike{text-align:center;color:var(--yellow);}
+  .opt-tab td{padding:8px 16px;text-align:right;color:var(--white);border-bottom:1px solid #191919;}
+  .opt-tab td.dim{color:#4a4a4a;}
+  .opt-tab .opt-strike{color:var(--yellow);font-weight:700;font-size:16px;text-align:center;background:#0e0e0e;min-width:72px;}
+  .opt-tab tr:hover td{background:#141414;}
+  .opt-tab tr.atmrow td{background:#1d1810;}
+  .opt-tab tr.atmrow .opt-strike{background:#2e2512;color:#ffd400;}
+  .opt-setup{color:var(--dim);font-size:14px;line-height:1.8;max-width:680px;margin:30px auto;text-align:center;}
+  .opt-setup code{color:var(--amber);background:#141414;padding:2px 6px;border-radius:3px;font-size:13px;}
   .fa-src{color:var(--dim);font-size:11px;margin:10px 0 20px;max-width:900px;line-height:1.5;}
   /* ---- portfolio (PORT) view ---- */
   #portview{padding:8px 14px;overflow:auto;height:calc(100vh - 30px);}
@@ -540,12 +550,13 @@
     <div class="chart-top">
       <button class="btn" onclick="showMonitor()">← Monitor</button>
       <span class="ctitle" id="opt-title">OPTIONS</span>
-      <input id="opt-tk" class="cmp-input" style="width:78px;text-transform:uppercase;margin-left:8px"
+      <input id="opt-tk" class="cmp-input" style="width:96px;text-transform:uppercase;margin-left:10px;font-size:15px;padding:5px 8px"
              placeholder="ticker" autocomplete="off"
              onkeydown="if(event.key==='Enter')showOptions(this.value.trim().toUpperCase())">
-      <span id="opt-under" class="dim" style="margin-left:10px"></span>
-      <div class="tfbar" id="opt-exps" style="margin-left:auto;flex-wrap:wrap"></div>
+      <span id="opt-under" class="opt-under"></span>
     </div>
+    <div class="opt-explabel">Choose expiration date:</div>
+    <div id="opt-exps" class="opt-exps"></div>
     <div id="opt-body"></div>
   </div>
 
@@ -1253,7 +1264,7 @@ function showOptionsNav(){ showOptions(optState.ticker||"GDX"); }   // main-bar 
 async function showOptions(ticker){
   if(!ticker)return;
   optState.ticker=ticker; show("optview");
-  document.getElementById("opt-title").textContent=`${ticker} — OPTIONS`;
+  document.getElementById("opt-title").textContent=`${ticker} — CALL OPTIONS`;
   const tk=document.getElementById("opt-tk"); if(tk&&document.activeElement!==tk)tk.value=ticker;
   document.getElementById("opt-under").textContent="";
   document.getElementById("opt-exps").innerHTML="";
@@ -1271,28 +1282,26 @@ async function showOptions(ticker){
 }
 function renderOptExps(){
   document.getElementById("opt-exps").innerHTML=optState.chain.expirations.map(e=>
-    `<button class="tf ${e.exp===optState.exp?'active':''}" onclick="setOptExp('${e.exp}')">${optExpLabel(e.exp)}</button>`).join("");
+    `<button class="${e.exp===optState.exp?'active':''}" onclick="setOptExp('${e.exp}')">${optExpLabel(e.exp)}</button>`).join("");
 }
 function setOptExp(exp){ optState.exp=exp; renderOptExps(); renderOptChain(); }
-function renderOptChain(){
+function renderOptChain(){        // CALLS only, larger, auto-scrolled to the money
   const e=optState.chain.expirations.find(x=>x.exp===optState.exp); if(!e)return;
-  const by={}; e.calls.forEach(c=>{(by[c.strike]=by[c.strike]||{}).c=c;});
-  e.puts.forEach(p=>{(by[p.strike]=by[p.strike]||{}).p=p;});
-  const strikes=Object.keys(by).map(Number).sort((a,b)=>a-b);
+  const calls=[...e.calls].sort((a,b)=>a.strike-b.strike);
   const up=optState.chain.underlyingPrice;
-  const atm=(up!=null&&strikes.length)?strikes.reduce((a,b)=>Math.abs(b-up)<Math.abs(a-up)?b:a):null;
-  const hd=x=>`<th>${x}</th>`;
-  let h=`<div class="opt-wrap"><table class="opt-tab"><thead>`+
-    `<tr><th colspan="6" class="side">CALLS</th><th class="opt-strike">STRIKE</th><th colspan="6" class="side">PUTS</th></tr>`+
-    `<tr>`+["Bid","Ask","Last","IV%","Δ","OI"].map(hd).join("")+`<th class="opt-strike"></th>`+
-    ["Bid","Ask","Last","IV%","Δ","OI"].map(hd).join("")+`</tr></thead><tbody>`;
-  for(const k of strikes){
-    const c=by[k].c||{}, p=by[k].p||{};
-    h+=`<tr>`+optC(c.bid,2)+optC(c.ask,2)+optC(c.last,2)+optC(c.iv,1)+optC(c.delta,2)+optN(c.oi)+
-      `<td class="opt-strike${k===atm?' atm':''}">${(k%1?k.toFixed(2):k)}</td>`+
-      optC(p.bid,2)+optC(p.ask,2)+optC(p.last,2)+optC(p.iv,1)+optC(p.delta,2)+optN(p.oi)+`</tr>`;
+  const atm=(up!=null&&calls.length)?calls.reduce((a,b)=>Math.abs(b.strike-up)<Math.abs(a.strike-up)?b:a).strike:null;
+  const hd=["STRIKE","BID","ASK","LAST","IV %","DELTA","OPEN INT","VOLUME"]
+    .map((x,i)=>`<th class="${i===0?'opt-strike':''}">${x}</th>`).join("");
+  let h=`<div class="opt-wrap"><table class="opt-tab"><thead><tr>${hd}</tr></thead><tbody>`;
+  for(const c of calls){
+    h+=`<tr class="${c.strike===atm?'atmrow':''}">`+
+      `<td class="opt-strike">${c.strike%1?c.strike.toFixed(2):c.strike}</td>`+
+      optC(c.bid,2)+optC(c.ask,2)+optC(c.last,2)+optC(c.iv,1)+optC(c.delta,2)+optN(c.oi)+optN(c.volume)+`</tr>`;
   }
-  document.getElementById("opt-body").innerHTML=h+`</tbody></table></div>`;
+  const body=document.getElementById("opt-body");
+  body.innerHTML=h+`</tbody></table></div>`;
+  const atmEl=body.querySelector("tr.atmrow"), wrap=body.querySelector(".opt-wrap");
+  if(atmEl&&wrap) wrap.scrollTop=Math.max(0, atmEl.offsetTop - wrap.clientHeight/2);   // land near the money
 }
 
 /* ---- portfolio (PORT) ---- */

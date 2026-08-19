@@ -962,7 +962,7 @@ async def fetch_option_chain(session, symbol, max_exps=None):
             continue
         T = max((datetime.fromisoformat(cur["exp"]) - now).days, 0) / 365.0
         cur["calls"].append(_opt_contract("c", row, "c_", K, under, T))
-        cur["puts"].append(_opt_contract("p", row, "p_", K, under, T))
+        # puts intentionally omitted — the terminal's Options view shows CALLS only
     out["expirations"] = [e for e in out["expirations"] if e["exp"] and (e["calls"] or e["puts"])]
     if max_exps:
         out["expirations"] = out["expirations"][:max_exps]
