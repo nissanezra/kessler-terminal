@@ -11,6 +11,7 @@ financials, news, and technical indicators. All sources are free / no-key:
 import asyncio
 import html as _html
 import json
+import math
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -796,6 +797,177 @@ async def fetch_description(session, ticker):
             continue
     _DESC_CACHE[key] = (time.time(), result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Option chains — FREE via Nasdaq (delayed ~15m, no login/account). Nasdaq gives
+# bid/ask/last/volume/OI but no greeks, so we compute IV + greeks (Black-Scholes).
+# ---------------------------------------------------------------------------
+NASDAQ_OPT = "https://api.nasdaq.com/api/quote/{t}/option-chain"
+_OPT_R = 0.045          # risk-free rate assumption for the greeks (approx short rate)
+_OPT_CACHE: dict = {}   # symbol -> (epoch, chain); the chain is delayed anyway
+_OPT_TTL = 45
+
+
+def _ncdf(x):
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _npdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def _bs(cp, S, K, T, r, sigma):
+    """Black-Scholes -> (price, delta, gamma, theta/day, vega/1%). cp = 'c' or 'p'."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return None
+    sq = math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sq)
+    d2 = d1 - sigma * sq
+    if cp == "c":
+        price = S * _ncdf(d1) - K * math.exp(-r * T) * _ncdf(d2)
+        delta = _ncdf(d1)
+        theta = (-(S * _npdf(d1) * sigma) / (2 * sq)
+                 - r * K * math.exp(-r * T) * _ncdf(d2)) / 365.0
+    else:
+        price = K * math.exp(-r * T) * _ncdf(-d2) - S * _ncdf(-d1)
+        delta = _ncdf(d1) - 1.0
+        theta = (-(S * _npdf(d1) * sigma) / (2 * sq)
+                 + r * K * math.exp(-r * T) * _ncdf(-d2)) / 365.0
+    gamma = _npdf(d1) / (S * sigma * sq)
+    vega = S * _npdf(d1) * sq / 100.0
+    return price, delta, gamma, theta, vega
+
+
+def _implied_vol(cp, mkt, S, K, T, r):
+    """Solve Black-Scholes for implied vol (Newton). None if it can't converge."""
+    if not mkt or T <= 0 or S <= 0 or K <= 0:
+        return None
+    intrinsic = max(0.0, (S - K) if cp == "c" else (K - S))
+    if mkt < intrinsic - 0.02:
+        return None
+    sigma = max(0.1, math.sqrt(2 * math.pi / T) * mkt / S)   # Brenner-Subrahmanyam seed
+    for _ in range(24):
+        res = _bs(cp, S, K, T, r, sigma)
+        if not res:
+            return None
+        price, _d, _g, _t, vega = res
+        diff = price - mkt
+        if abs(diff) < 1e-4:
+            return sigma
+        dvds = vega * 100.0                    # dPrice/dSigma
+        if dvds < 1e-8:
+            break
+        sigma -= diff / dvds
+        sigma = min(max(sigma, 1e-4), 5.0)
+    return sigma if 1e-4 < sigma < 5.0 else None
+
+
+def _optnum(x):
+    if x in (None, "--", "", "N/A"):
+        return None
+    try:
+        return float(str(x).replace(",", "").replace("$", ""))
+    except ValueError:
+        return None
+
+
+def _optint(x):
+    v = _optnum(x)
+    return int(v) if v is not None else None
+
+
+def _opt_contract(cp, row, pfx, K, S, T):
+    bid, ask = _optnum(row.get(pfx + "Bid")), _optnum(row.get(pfx + "Ask"))
+    last = _optnum(row.get(pfx + "Last"))
+    mid = (bid + ask) / 2 if (bid is not None and ask) else last
+    iv = delta = gamma = theta = vega = None
+    # greeks only where they're meaningful: near-the-money (0.5x–2x spot) with real
+    # time value. Deep ITM/OTM are illiquid and their IV is just bid/ask noise.
+    if mid and S and T > 0 and 0.4 * S <= K <= 2.6 * S:
+        intrinsic = max(0.0, (S - K) if cp == "c" else (K - S))
+        if mid - intrinsic > 0.05:
+            sig = _implied_vol(cp, mid, S, K, T, _OPT_R)
+            if sig and sig < 2.5:                  # reject implausible IV (>250% = noise)
+                res = _bs(cp, S, K, T, _OPT_R, sig)
+                if res:
+                    _p, delta, gamma, theta, vega = res
+                    iv = round(sig * 100, 1)
+                    if vega is not None and vega < 0.02:   # too insensitive to vol -> IV
+                        iv = gamma = theta = None          # is noise; keep the robust delta
+    r3 = lambda v, n=3: round(v, n) if v is not None else None    # noqa: E731
+    return {"symbol": None, "strike": K, "bid": bid, "ask": ask, "last": last,
+            "mark": r3(mid, 2), "delta": r3(delta), "gamma": r3(gamma, 4),
+            "theta": r3(theta), "vega": r3(vega), "iv": iv,
+            "oi": _optint(row.get(pfx + "Openinterest")),
+            "volume": _optint(row.get(pfx + "Volume")), "dte": round(T * 365)}
+
+
+async def fetch_option_chain(session, symbol, max_exps=None):
+    """Full option chain via Nasdaq (free, delayed). Same shape as the Schwab chain,
+    with IV + greeks computed via Black-Scholes."""
+    sym = symbol.upper()
+    hit = _OPT_CACHE.get(sym)
+    if hit and (time.time() - hit[0]) < _OPT_TTL:
+        return hit[1]
+    # a symbol is exactly one asset class, but we don't know which — fire all three at
+    # once and take whichever returns rows (≈ one request's latency, not three).
+    async def _try(ac):
+        params = {"assetclass": ac, "limit": "9999", "fromdate": "all",
+                  "todate": "undefined", "excode": "oprac", "callput": "callput",
+                  "money": "all", "type": "all"}
+        try:
+            async with session.get(NASDAQ_OPT.format(t=sym), params=params,
+                                   headers=NASDAQ_HDR,
+                                   timeout=aiohttp.ClientTimeout(total=20)) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json(content_type=None)
+            data = d.get("data") or {}
+            rr = ((data.get("table") or {}).get("rows")) or []
+            if not rr:
+                return None
+            m = re.search(r"\$([\d,]+\.?\d*)", str(data.get("lastTrade") or ""))
+            return rr, (float(m.group(1).replace(",", "")) if m else None)
+        except Exception:
+            return None
+
+    rows, under = None, None
+    for res in await asyncio.gather(*(_try(ac) for ac in ("stocks", "etf", "index"))):
+        if res:
+            rows, under = res
+            break
+    out = {"symbol": sym, "underlyingPrice": under, "isDelayed": True,
+           "source": "Nasdaq (delayed ~15 min)", "expirations": []}
+    if not rows:
+        return out                                  # not cached: retry next time
+    now = datetime.now()
+    cur = None
+    for row in rows:
+        eg = (row.get("expirygroup") or "").strip()
+        strike = row.get("strike")
+        if eg and not strike:                        # expiration header row
+            try:
+                iso = datetime.strptime(eg, "%B %d, %Y").strftime("%Y-%m-%d")
+            except ValueError:
+                iso = None
+            cur = {"exp": iso, "calls": [], "puts": []}
+            out["expirations"].append(cur)
+            continue
+        if strike is None or cur is None or not cur["exp"]:
+            continue
+        try:
+            K = float(str(strike).replace(",", ""))
+        except ValueError:
+            continue
+        T = max((datetime.fromisoformat(cur["exp"]) - now).days, 0) / 365.0
+        cur["calls"].append(_opt_contract("c", row, "c_", K, under, T))
+        cur["puts"].append(_opt_contract("p", row, "p_", K, under, T))
+    out["expirations"] = [e for e in out["expirations"] if e["exp"] and (e["calls"] or e["puts"])]
+    if max_exps:
+        out["expirations"] = out["expirations"][:max_exps]
+    _OPT_CACHE[sym] = (time.time(), out)
+    return out
 
 
 async def fetch_institutional_holders(session, ticker, top=15):

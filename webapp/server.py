@@ -405,12 +405,13 @@ async def api_options(request):
     from Schwab's READ-ONLY Market Data API. Returns configured:false until the one-time
     Schwab login is done, so the frontend can show a friendly 'set up' message."""
     ticker = request.query.get("ticker", "GDX").upper()
-    if not smd or not smd.is_configured():
-        return web.json_response({"configured": False,
-                                  "need_creds": not (smd and smd.have_creds())})
     s = request.app["session"]
     try:
-        chain = await smd.get_option_chain(s, ticker)
+        if smd and smd.is_configured():                 # Schwab real-time (if ever set up)
+            chain = await smd.get_option_chain(s, ticker)
+            chain.setdefault("source", "Schwab (real-time)")
+        else:                                           # free default: Nasdaq (delayed) + BS greeks
+            chain = await td.fetch_option_chain(s, ticker)
         chain["configured"] = True
         return web.json_response(chain)
     except Exception as e:

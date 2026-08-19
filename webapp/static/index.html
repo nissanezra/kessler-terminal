@@ -1266,7 +1266,7 @@ async function showOptions(ticker){
   if(!d.expirations||!d.expirations.length){ document.getElementById("opt-body").innerHTML=`<p class='dim'>No options listed for ${esc(ticker)}.</p>`; return; }
   optState.chain=d; optState.exp=d.expirations[0].exp;
   document.getElementById("opt-under").textContent=
-    `underlying ${d.underlyingPrice!=null?fmtV(d.underlyingPrice):"?"} · ${d.isDelayed?"delayed":"live"}`;
+    `underlying ${d.underlyingPrice!=null?fmtV(d.underlyingPrice):"?"} · ${d.source||(d.isDelayed?"delayed":"live")}`;
   renderOptExps(); renderOptChain();
 }
 function renderOptExps(){
