@@ -465,6 +465,11 @@ async def _cnbc_hist(session, symbol, tf="1Y", custom=None):
             bars = [{k: v for k, v in b.items() if k != "day"}
                     for b in bars if b["day"] == lastday]
         return bars
+    if bars:                                       # CNBC can return the current day twice
+        _seen = {}                                 # (live session + settled close) — keep the
+        for b in bars:                             # latest; a duplicate date blanks the chart
+            _seen[b["t"]] = b
+        bars = list(_seen.values())
     if custom:                                    # warmup / custom date window
         frm, to = custom
         return [b for b in bars if frm <= b["t"] <= to]
