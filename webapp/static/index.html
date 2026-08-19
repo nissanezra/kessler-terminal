@@ -202,6 +202,17 @@
   .opt-tab tbody tr:hover .opt-strike{background:#5a4910;color:#ffe14d;font-size:17px;}
   .opt-setup{color:var(--dim);font-size:14px;line-height:1.8;max-width:680px;margin:30px auto;text-align:center;}
   .opt-setup code{color:var(--amber);background:#141414;padding:2px 6px;border-radius:3px;font-size:13px;}
+  /* your-position tracker panel */
+  .opt-positions{margin:10px 0 4px;}
+  .opt-pos{background:#111;border:1px solid #333;border-left:4px solid var(--amber);border-radius:8px;
+    padding:12px 18px;margin-bottom:8px;max-width:560px;}
+  .opt-pos-hd{color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.08em;}
+  .opt-pos-desc{color:#fff;font-size:16px;font-weight:700;margin:3px 0 8px;}
+  .opt-pos-row{display:flex;justify-content:space-between;gap:20px;color:var(--dim);font-size:13.5px;margin:2px 0;}
+  .opt-pos-row b{color:#fff;font-weight:700;}
+  .opt-pos-pl{font-size:24px;font-weight:800;margin-top:8px;}
+  .opt-pos-pl.up{color:var(--green);} .opt-pos-pl.down{color:var(--red);}
+  .opt-pos-note{color:#666;font-size:11px;margin-top:4px;}
   .fa-src{color:var(--dim);font-size:11px;margin:10px 0 20px;max-width:900px;line-height:1.5;}
   /* ---- portfolio (PORT) view ---- */
   #portview{padding:8px 14px;overflow:auto;height:calc(100vh - 30px);}
@@ -557,6 +568,7 @@
              onkeydown="if(event.key==='Enter')showOptions(this.value.trim().toUpperCase())">
       <span id="opt-under" class="opt-under"></span>
     </div>
+    <div id="opt-positions" class="opt-positions"></div>
     <div class="opt-explabel">Choose expiration date:</div>
     <div id="opt-exps" class="opt-exps"></div>
     <div id="opt-body"></div>
@@ -1262,6 +1274,32 @@ function optSetupMsg(d){
       : `Run <code>python schwab_md.py login</code> once to sign in to Schwab.`)+
     `<br><br>Read-only Market Data only — no account access, no trading.</div>`;
 }
+/* tracked option positions — live P&L pinned atop the Options view. entry = price paid per option. */
+const OPT_POSITIONS=[
+  {ticker:"GDX", exp:"2026-11-20", strike:110, type:"call", contracts:50, entry:4.60},
+];
+function optFindContract(chain, exp, strike){
+  const e=(chain.expirations||[]).find(x=>x.exp===exp); if(!e)return null;
+  return (e.calls||[]).find(c=>Math.abs(c.strike-strike)<0.001)||null;
+}
+function renderOptPositions(){
+  const el=document.getElementById("opt-positions"); if(!el)return;
+  const ch=optState.chain, mine=ch?OPT_POSITIONS.filter(p=>p.ticker===ch.symbol):[];
+  if(!mine.length){el.innerHTML="";return;}
+  const money=v=>"$"+Math.round(v).toLocaleString();
+  el.innerHTML=mine.map(p=>{
+    const c=optFindContract(ch,p.exp,p.strike);
+    const now=c?(c.mark!=null?c.mark:(c.last!=null?c.last:((c.bid!=null&&c.ask!=null)?(c.bid+c.ask)/2:null))):null;
+    const cost=p.entry*100*p.contracts, val=now!=null?now*100*p.contracts:null;
+    const pl=val!=null?val-cost:null, plpct=pl!=null?pl/cost*100:null, cls=pl==null?"":(pl>=0?"up":"down");
+    return `<div class="opt-pos"><div class="opt-pos-hd">YOUR POSITION</div>`+
+      `<div class="opt-pos-desc">${esc(p.ticker)} ${optExpLabel(p.exp)} $${p.strike} Call · ${p.contracts} contracts</div>`+
+      `<div class="opt-pos-row"><span>Entry <b>$${p.entry.toFixed(2)}</b></span><span>Now <b>${now!=null?"$"+now.toFixed(2):"–"}</b>${c?` <span style="color:#666">(bid ${c.bid!=null?c.bid:"–"} / ask ${c.ask!=null?c.ask:"–"})</span>`:""}</span></div>`+
+      `<div class="opt-pos-row"><span>Value now <b>${val!=null?money(val):"–"}</b></span><span>Cost <b>${money(cost)}</b></span></div>`+
+      `<div class="opt-pos-pl ${cls}">${pl!=null?((pl>=0?"+":"")+money(pl)+"  ("+(plpct>=0?"+":"")+plpct.toFixed(1)+"%)"):"—"}</div>`+
+      `<div class="opt-pos-note">marked at mid · ${ch.isDelayed?"delayed ~15 min":"live"}</div></div>`;
+  }).join("");
+}
 function showOptionsNav(){ showOptions(optState.ticker||"GDX"); }   // main-bar OPTIONS -> last, else GDX
 async function showOptions(ticker){
   if(!ticker)return;
@@ -1270,6 +1308,7 @@ async function showOptions(ticker){
   const tk=document.getElementById("opt-tk"); if(tk&&document.activeElement!==tk)tk.value=ticker;
   document.getElementById("opt-under").textContent="";
   document.getElementById("opt-exps").innerHTML="";
+  document.getElementById("opt-positions").innerHTML="";
   document.getElementById("opt-body").innerHTML="<p class='dim'>Loading option chain…</p>";
   let d; try{ d=await(await fetch(`/api/options?ticker=${encodeURIComponent(ticker)}`)).json(); }
   catch(e){ document.getElementById("opt-body").innerHTML="<p class='dim'>Couldn't load options.</p>"; return; }
@@ -1280,7 +1319,7 @@ async function showOptions(ticker){
   optState.chain=d; optState.exp=d.expirations[0].exp;
   document.getElementById("opt-under").textContent=
     `underlying ${d.underlyingPrice!=null?fmtV(d.underlyingPrice):"?"} · ${d.source||(d.isDelayed?"delayed":"live")}`;
-  renderOptExps(); renderOptChain();
+  renderOptPositions(); renderOptExps(); renderOptChain();
 }
 function renderOptExps(){
   document.getElementById("opt-exps").innerHTML=optState.chain.expirations.map(e=>
