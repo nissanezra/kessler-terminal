@@ -195,9 +195,11 @@
   .opt-tab td{padding:8px 16px;text-align:right;color:var(--white);border-bottom:1px solid #191919;}
   .opt-tab td.dim{color:#4a4a4a;}
   .opt-tab .opt-strike{color:var(--yellow);font-weight:700;font-size:16px;text-align:center;background:#0e0e0e;min-width:72px;}
-  .opt-tab tr:hover td{background:#141414;}
   .opt-tab tr.atmrow td{background:#1d1810;}
   .opt-tab tr.atmrow .opt-strike{background:#2e2512;color:#ffd400;}
+  /* hover: bold + highlight the WHOLE row so the line reads straight across */
+  .opt-tab tbody tr:hover td{background:#3a3005;color:#fff;font-weight:700;font-size:16px;}
+  .opt-tab tbody tr:hover .opt-strike{background:#5a4910;color:#ffe14d;font-size:17px;}
   .opt-setup{color:var(--dim);font-size:14px;line-height:1.8;max-width:680px;margin:30px auto;text-align:center;}
   .opt-setup code{color:var(--amber);background:#141414;padding:2px 6px;border-radius:3px;font-size:13px;}
   .fa-src{color:var(--dim);font-size:11px;margin:10px 0 20px;max-width:900px;line-height:1.5;}
