@@ -502,8 +502,8 @@ async def fetch_history(session, ticker, tf="1Y", custom=None):
             return await _nasdaq_index_hist(session, sym, tf, custom)
         scale = idx[3] if len(idx) > 3 else 1     # proxy ETF -> index-level scale (DIA*100 etc.)
         ticker = sym   # proxy ETF -> fetch like a normal stock below
-    elif ticker[:1] in (".", "@"):                # CNBC-native index / futures symbol
-        return await _cnbc_hist(session, ticker, tf, custom)
+    elif ticker[:1] in (".", "@") or ticker.upper().endswith(_FOREIGN_SUFFIXES):
+        return await _cnbc_hist(session, ticker, tf, custom)   # CNBC index/futures/foreign
     if custom:
         # ticker is already index-resolved above (nasdaq returned, proxy -> ETF symbol)
         if is_crypto(ticker):
@@ -700,6 +700,29 @@ NASDAQ_INST = "https://api.nasdaq.com/api/company/{t}/institutional-holdings"
 _ETF_HOLD_CACHE: dict = {}          # ticker -> (epoch, holdings-or-None)
 _ETF_HOLD_TTL = 6 * 3600           # holdings change slowly; cache 6h
 
+# StockAnalysis tags a foreign holding with its exchange ("!etr/BAYN" = Bayer on XETRA).
+# CNBC quotes/charts those with a "-CC" country suffix (BAYN-DE), so map exchange -> suffix
+# and make the clickable symbol that CNBC-resolvable form. Unknown exchanges stay bare.
+_EXCH_SUFFIX = {
+    "etr": "-DE", "fra": "-DE", "ger": "-DE", "xetra": "-DE",       # Germany
+    "lon": "-GB", "tyo": "-JP", "osl": "-NO", "sgx": "-SG", "asx": "-AU",
+    "tsx": "-CA", "tsv": "-CA", "cve": "-CA", "epa": "-FR", "ams": "-NL",
+    "ebr": "-BE", "swx": "-CH", "vtx": "-CH", "mil": "-IT", "bme": "-ES",
+    "sto": "-SE", "cph": "-DK", "hel": "-FI", "lis": "-PT", "vie": "-AT",
+}
+# symbols ending in one of these are foreign -> chart them via CNBC history
+_FOREIGN_SUFFIXES = tuple(sorted(set(_EXCH_SUFFIX.values())))
+
+
+def _holding_symbols(raw):
+    """(display, cnbc_symbol) from a StockAnalysis holdings symbol like '!etr/BAYN', '$DE'."""
+    raw = (raw or "").strip()
+    if raw.startswith("!"):                       # foreign: "!etr/BAYN"
+        parts = raw[1:].split("/")
+        tk = parts[-1]
+        return tk, tk + _EXCH_SUFFIX.get(parts[0].lower(), "")
+    return raw.lstrip("$"), raw.lstrip("$")       # US ("$DE"->DE) or already-suffixed
+
 
 def _sa_deref_holdings(flat):
     """Pull the holdings list out of StockAnalysis' deduplicated data array."""
@@ -748,10 +771,12 @@ async def fetch_etf_holdings(session, ticker, top=15):
                         if hold:
                             break
                 if hold:
-                    result = [{"name": h.get("n"),
-                               "symbol": (h.get("s") or "").lstrip("$!").split("/")[-1],
-                               "weight": (h.get("as") or "").rstrip("%") or None,
-                               "shares": h.get("sh")} for h in hold]
+                    result = []
+                    for h in hold:
+                        disp, csym = _holding_symbols(h.get("s"))
+                        result.append({"name": h.get("n"), "symbol": disp, "csym": csym,
+                                       "weight": (h.get("as") or "").rstrip("%") or None,
+                                       "shares": h.get("sh")})
     except Exception:
         result = None
     _ETF_HOLD_CACHE[key] = (time.time(), result)

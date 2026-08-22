@@ -2315,6 +2315,11 @@ async def index(request):
         app_version = (HERE.parent / ".appversion").read_text(encoding="utf-8").strip()
     except Exception:
         app_version = ""
+    try:                                               # display name (packaged builds carry appname.txt)
+        app_name = (HERE.parent / "appname.txt").read_text(encoding="utf-8").strip()
+    except Exception:
+        app_name = ""
+    app_name = app_name or "Kessler-Katznelson Terminal"
     cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
            "window.NATIVE_PDF=%s;window.APP_VERSION=%s;window.OPTIONS_READY=%s;</script>") % (
         "true" if os.environ.get("MKT_NO_PORT") else "false",
@@ -2331,6 +2336,7 @@ async def index(request):
         _record_seen(dev_id, request.query.get("u") or request.cookies.get("kkt_name"),
                      _client_ip(request), request.headers.get("User-Agent", ""))
     page = page.replace("{{GREETING_NAME}}", html.escape(who or "", quote=True)) \
+               .replace("{{APP_NAME}}", html.escape(app_name)) \
                .replace("{{APP_CONFIG}}", cfg)
     resp = web.Response(text=page, content_type="text/html")
     # Never let the webview cache the shell: after an auto-update pulls a new index.html,

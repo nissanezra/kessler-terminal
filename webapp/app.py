@@ -78,7 +78,11 @@ def main():
                   f"   —  open in Safari, then Share › Add to Home Screen", flush=True)
     try:
         import webview
-        webview.create_window("Kessler-Katznelson Terminal", url,
+        try:                                     # packaged builds carry appname.txt
+            _title = (HERE.parent / "appname.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            _title = ""
+        webview.create_window(_title or "Kessler-Katznelson Terminal", url,
                               width=1600, height=1000, min_size=(1100, 700))
         if sys.platform.startswith("win"):
             webview.start(gui="edgechromium")  # require modern WebView2; raises if absent
