@@ -49,7 +49,7 @@
     padding:4px 10px;background:#000;border-bottom:1px solid #1a1a1a;
     position:sticky;top:0;z-index:30;}
   #titlebar .tb-left{display:flex;align-items:center;gap:12px;min-width:0;}
-  #titlebar .navgroup{display:flex;align-items:center;gap:10px;justify-self:center;}
+  #titlebar .navgroup{display:flex;align-items:center;gap:7px;justify-self:center;}
   #titlebar .name{color:var(--amber);font-weight:700;letter-spacing:.06em;white-space:nowrap;text-transform:uppercase;}
   #cmdwrap{flex:1;display:flex;align-items:stretch;min-width:0;position:relative;}
   #cmd-sug{position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:40;
@@ -75,6 +75,8 @@
   #cmd-go:active{transform:translateY(1px);}
   #titlebar .clock{color:var(--white);font-weight:700;white-space:nowrap;}
   #titlebar .tb-right{display:flex;align-items:center;gap:14px;justify-self:end;min-width:0;}
+  #searchrow{display:flex;padding:7px 10px;background:#000;border-bottom:1px solid #1a1a1a;}
+  #searchrow #cmdwrap{flex:1;max-width:820px;}
   .mkt-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
     letter-spacing:.05em;white-space:nowrap;}
   .mkt-status .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
@@ -83,8 +85,8 @@
   .mkt-status.closed{color:var(--red);}
   .mkt-status.closed .dot{background:var(--red);}
   .navbtn{color:var(--amber);background:transparent;border:1px solid #4a3a15;
-    padding:4px 14px;cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;
-    letter-spacing:.06em;white-space:nowrap;transition:background .12s,color .12s;}
+    padding:4px 10px;cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;
+    letter-spacing:.03em;white-space:nowrap;transition:background .12s,color .12s;}
   .navbtn:hover{background:var(--amber);color:#000;border-color:var(--amber);}
   .navbtn:active{transform:translateY(1px);}
   /* investment calculator (local only) */
@@ -459,11 +461,6 @@
     <div class="tb-left">
       <span class="name">{{APP_NAME}}</span>
       <span id="appver" style="color:var(--dim);font-size:10px;font-weight:700;margin-left:6px"></span>
-      <div id="cmdwrap">
-        <input id="cmd" placeholder="Type ticker you want to search...  (e.g. AAPL)" autocomplete="off" />
-        <button id="cmd-go" onclick="goCmd()">GO</button>
-        <div id="cmd-sug"></div>
-      </div>
     </div>
     <div class="navgroup">
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
@@ -473,11 +470,17 @@
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn" onclick="showShared()">SHARED</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
-      <button class="navbtn navbtn-calc" id="nav-calc" onclick="showCalc()" style="display:none">CALCULATOR</button>
     </div>
     <div class="tb-right">
       <span class="mkt-status" id="mkt-status"></span>
       <span class="clock" id="clock"></span>
+    </div>
+  </div>
+  <div id="searchrow">
+    <div id="cmdwrap">
+      <input id="cmd" placeholder="Type a ticker to search…  (e.g. AAPL, GDX, .DXY)" autocomplete="off" />
+      <button id="cmd-go" onclick="goCmd()">GO</button>
+      <div id="cmd-sug"></div>
     </div>
   </div>
 
@@ -798,8 +801,6 @@ function scheduleWS(){ wsRetry=Math.min(wsRetry+1,8); setTimeout(connectWS,400*w
 loadMonitor();          // instant first paint
 connectWS();            // then live stream
 setInterval(()=>{ if((!ws||ws.readyState!==1)&&document.getElementById("monitor").classList.contains("active"))loadMonitor(); },3000);
-// Investment Calculator: local-only (Ezra's Mac). Hidden on the Fly app + Robert's build.
-if(window.LOCAL_TOOLS){ const b=document.getElementById("nav-calc"); if(b)b.style.display=""; }
 // "Share" button labels who it goes to (the other person on the desk).
 { const sb=document.getElementById("rd-share-btn"); if(sb&&window.SHARE_TO&&window.SHARE_TO!=="team")sb.textContent="Share with "+window.SHARE_TO; }
 
