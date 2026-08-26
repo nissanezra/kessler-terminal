@@ -2075,7 +2075,10 @@ async def api_portfolio(request):
         face = nt.get("face", 0)
         mat = datetime.strptime(nt["maturity"], "%Y-%m-%d")
         years = max((mat - now).days / 365.25, 0)
-        y, dchg = _yield(_tenor_sym(years))
+        if nt.get("ytm") is not None:              # stated yield (held at that level, not marked live)
+            y, dchg = float(nt["ytm"]), 0.0
+        else:
+            y, dchg = _yield(_tenor_sym(years))    # else mark live to the current curve
         tre_coupon += face * nt.get("coupon", 0) / 100
         if y is None:
             px, mv, dval, ytxt = 100.0, face, 0.0, None

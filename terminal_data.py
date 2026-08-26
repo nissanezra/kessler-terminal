@@ -16,6 +16,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
 import aiohttp
@@ -1272,30 +1273,54 @@ def _label_sources(items):
     return items
 
 
+def _pub_ts(item):
+    """Parse an RSS pubDate to a UTC timestamp; 0 if unparseable (sinks to bottom)."""
+    pub = item.get("pub", "")
+    if not pub:
+        return 0.0
+    try:
+        dt = parsedate_to_datetime(pub)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sort_recent(items):
+    """Newest first — Google News RSS returns relevance order, which buries fresh
+    headlines under evergreen ones."""
+    return sorted(items, key=_pub_ts, reverse=True)
+
+
+async def _gnews(session, query, limit):
+    params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    async with session.get(GOOGLE_NEWS, params=params, headers=UA,
+                           timeout=aiohttp.ClientTimeout(total=10)) as r:
+        return _parse_rss(await r.text(), limit)
+
+
 async def fetch_news(session, ticker=None, limit=20):
     if ticker:
         if is_crypto(ticker):
             t = ticker.upper().replace("-USD", "").replace("USDT", "")
-            query = CRYPTO_NAMES.get(t, t) + " crypto"
+            base = CRYPTO_NAMES.get(t, t) + " crypto"
         else:
-            query = ticker.upper() + " stock"
-        url = GOOGLE_NEWS
-        params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
-    else:
-        url, params = CNBC_RSS, {}
-    try:
-        async with session.get(url, params=params, headers=UA,
-                               timeout=aiohttp.ClientTimeout(total=10)) as r:
-            text = await r.text()
-        items = _parse_rss(text, limit)
-        if items:
-            return _label_sources(items)
-    except Exception:
-        pass
-    # fallback to market news
+            base = ticker.upper() + " stock"
+        try:
+            # Bias to the last ~45 days so evergreen pieces don't crowd out fresh news…
+            items = await _gnews(session, base + " when:45d", limit)
+            # …but if coverage is thin, widen to all-time rather than show nothing.
+            if len(items) < 5:
+                items = await _gnews(session, base, limit)
+            if items:
+                return _label_sources(_sort_recent(items))
+        except Exception:
+            pass
+    # market news (no ticker, or the ticker query failed)
     async with session.get(CNBC_RSS, headers=UA,
                            timeout=aiohttp.ClientTimeout(total=10)) as r:
-        return _label_sources(_parse_rss(await r.text(), limit))
+        return _label_sources(_sort_recent(_parse_rss(await r.text(), limit)))
 
 
 # ---- daily market-news dashboard (several CNBC sections at once) -----------
