@@ -2044,6 +2044,20 @@ def _bond_price(coupon, years, ytm, freq=2):
     return sum(c / (1 + y) ** t for t in range(1, n + 1)) + 100 / (1 + y) ** n
 
 
+def _implied_ytm(coupon, years, price, freq=2):
+    """Invert _bond_price: the yield that reproduces a given clean price (bisection)."""
+    if years <= 0:
+        return 0.0
+    lo, hi = 0.0, 25.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if _bond_price(coupon, years, mid, freq) > price:
+            lo = mid            # priced above target -> yield must be higher
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
 def _live(sym):
     q = dash.STATE.get(sym)
     return q.price if q and q.price else 0.0
@@ -2072,21 +2086,31 @@ async def api_portfolio(request):
 
     tre_out, tre_mv, tre_daily, tre_coupon = [], 0.0, 0.0, 0.0
     for nt in pf.get("treasuries", []):
+        coup = nt.get("coupon", 0)
         face = nt.get("face", 0)
         mat = datetime.strptime(nt["maturity"], "%Y-%m-%d")
         years = max((mat - now).days / 365.25, 0)
-        if nt.get("ytm") is not None:              # stated yield (held at that level, not marked live)
-            y, dchg = float(nt["ytm"]), 0.0
-        else:
-            y, dchg = _yield(_tenor_sym(years))    # else mark live to the current curve
-        tre_coupon += face * nt.get("coupon", 0) / 100
-        if y is None:
-            px, mv, dval, ytxt = 100.0, face, 0.0, None
-        else:
-            px = _bond_price(nt.get("coupon", 0), years, y)
+        tre_coupon += face * coup / 100
+        if nt.get("price") is not None:            # exact broker price; day-change marked live
+            px = float(nt["price"])
+            ytxt = _implied_ytm(coup, years, px)
+            _, dchg = _yield(_tenor_sym(years))    # nearest benchmark's daily yield move
             mv = px / 100 * face
-            dval = (px - _bond_price(nt.get("coupon", 0), years, y - dchg)) / 100 * face
-            ytxt = y
+            dval = (px - _bond_price(coup, years, ytxt - dchg)) / 100 * face
+        elif nt.get("ytm") is not None:            # stated yield (held at that level, not marked live)
+            ytxt = float(nt["ytm"])
+            px = _bond_price(coup, years, ytxt)
+            mv = px / 100 * face
+            dval = 0.0
+        else:                                      # mark live to the current curve
+            y, dchg = _yield(_tenor_sym(years))
+            if y is None:
+                px, mv, dval, ytxt = 100.0, face, 0.0, None
+            else:
+                px = _bond_price(coup, years, y)
+                mv = px / 100 * face
+                dval = (px - _bond_price(coup, years, y - dchg)) / 100 * face
+                ytxt = y
         tre_mv += mv
         tre_daily += dval
         tre_out.append({"name": nt.get("name", "?"), "ytm": ytxt,
