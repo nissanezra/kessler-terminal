@@ -442,6 +442,45 @@
     .splash-name{font-size:30px;white-space:normal;} .splash-tag{font-size:18px;}
     .splash-greeting{font-size:19px;}
   }
+  /* ---------------- MESSAGES (M365 mailbox) ---------------- */
+  .msg-acct{color:var(--dim);font-size:12px;margin-left:6px;}
+  .msg-folders{display:inline-flex;gap:6px;margin-left:12px;}
+  .msg-fold{color:var(--amber);background:transparent;border:1px solid #4a3a15;
+    border-radius:3px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer;}
+  .msg-fold.active{background:var(--amber);color:#000;border-color:var(--amber);}
+  .msg-setup{max-width:760px;margin:22px auto;color:var(--price);font-size:15px;line-height:1.7;
+    border:1px solid #3a3a3a;border-radius:6px;padding:20px 24px;background:#111;}
+  .msg-setup h3{color:var(--amber);font-size:18px;margin:0 0 10px;}
+  .msg-setup ol{margin:10px 0 0 18px;padding:0;} .msg-setup li{margin:7px 0;}
+  .msg-setup code{color:var(--yellow);background:#1c1c1c;padding:1px 5px;border-radius:3px;font-size:13px;}
+  .msg-split{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:12px;
+    height:calc(100vh - var(--hdr-h, 130px));}
+  .msg-list{overflow-y:auto;border:1px solid #2a2a2a;border-radius:5px;}
+  .msg-item{padding:9px 12px;border-bottom:1px solid #1e1e1e;cursor:pointer;}
+  .msg-item:hover{background:#161207;} .msg-item.sel{background:#1d1607;border-left:3px solid var(--amber);padding-left:9px;}
+  .msg-item .mi-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline;}
+  .msg-item .mi-from{color:var(--white);font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .msg-item.unread .mi-from{color:var(--amber);}
+  .msg-item .mi-date{color:var(--dim);font-size:11px;white-space:nowrap;flex-shrink:0;}
+  .msg-item .mi-subj{color:var(--price);font-size:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .msg-item .mi-prev{color:var(--dim);font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .msg-item .mi-dot{color:var(--amber);margin-right:5px;}
+  .msg-read{overflow-y:auto;border:1px solid #2a2a2a;border-radius:5px;padding:16px 20px;}
+  .msg-empty{color:var(--dim);font-size:14px;text-align:center;margin-top:40px;}
+  .msg-rd-subj{color:var(--amber);font-size:19px;font-weight:700;margin-bottom:8px;}
+  .msg-rd-meta{color:var(--dim);font-size:13px;line-height:1.6;border-bottom:1px solid #2a2a2a;padding-bottom:10px;margin-bottom:12px;}
+  .msg-rd-meta b{color:var(--price);}
+  .msg-rd-body{color:var(--price);font-size:14px;line-height:1.6;}
+  .msg-rd-body p{margin:0 0 10px;} .msg-rd-body a{color:var(--yellow);}
+  .msg-rd-actions{margin-bottom:12px;display:flex;gap:8px;}
+  .msg-form label{display:block;color:var(--yellow);font-size:12px;margin:10px 0 3px;}
+  .msg-form input,.msg-form textarea{width:100%;background:#141414;border:1px solid #3a3a3a;
+    color:var(--white);font:inherit;font-size:14px;padding:8px 10px;border-radius:4px;box-sizing:border-box;}
+  .msg-form textarea{min-height:220px;resize:vertical;}
+  .msg-send-row{margin-top:14px;display:flex;gap:10px;align-items:center;}
+  .msg-note{color:var(--dim);font-size:12px;}
+  @media (max-width:820px){ .msg-split{grid-template-columns:1fr;height:auto;}
+    .msg-read{min-height:320px;} }
 </style>
 </head>
 <body>
@@ -469,6 +508,7 @@
       <button class="navbtn" onclick="showOptionsNav()">OPTIONS</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn" onclick="showShared()">SHARED</button>
+      <button class="navbtn" onclick="showMessages()">MESSAGES</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
     </div>
     <div class="tb-right">
@@ -604,6 +644,22 @@
     <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
       <span class="ctitle">RESEARCH</span></div>
     <div class="news" id="rs-list"></div>
+  </div>
+
+  <div id="msgview" class="view" style="padding:6px 12px;">
+    <div class="chart-top">
+      <button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" id="msg-refresh" onclick="loadInbox(true)">↻ Refresh</button>
+      <button class="btn" id="msg-compose-btn" onclick="msgCompose()">✎ Compose</button>
+      <span class="msg-folders" id="msg-folders"></span>
+      <span class="msg-acct" id="msg-acct"></span>
+      <span class="ctitle" style="margin-left:auto">MESSAGES</span>
+    </div>
+    <div id="msg-setup" class="msg-setup" style="display:none"></div>
+    <div id="msg-split" class="msg-split" style="display:none">
+      <div id="msg-list" class="msg-list"></div>
+      <div id="msg-read" class="msg-read"><div class="msg-empty">Select a message to read it here.</div></div>
+    </div>
   </div>
 
   <div id="dailyview" class="view">
@@ -1767,6 +1823,130 @@ async function saveGeminiKey(){
   }catch(e){ d={error:"Couldn't save."}; }
   if(d&&d.ok){ msg.textContent="Saved. Summarizing…"; doSummarize(); }
   else { msg.textContent=(d&&d.error)||"Couldn't save the key."; }
+}
+
+/* ---------------- MESSAGES (Microsoft 365 mailbox: read + send) ---------------- */
+let msgState={folder:"inbox",loaded:false,acct:null,sel:null,list:[]};
+function showMessages(){ show("msgview"); renderMsgFolders(); if(!msgState.loaded) loadInbox(false); }
+function renderMsgFolders(){
+  const f=document.getElementById("msg-folders");
+  if(!window.MAIL_READY){ f.innerHTML=""; return; }
+  f.innerHTML=[["inbox","Inbox"],["sentitems","Sent"]].map(([k,l])=>
+    `<button class="msg-fold ${msgState.folder===k?'active':''}" onclick="msgSetFolder('${k}')">${l}</button>`).join("");
+}
+function msgSetFolder(k){ msgState.folder=k; msgState.sel=null; renderMsgFolders(); loadInbox(true); }
+function msgSetupHtml(){
+  return `<h3>Inbox not connected yet</h3>
+    This panel becomes Robert's <b>${esc(window.SHARE_TO==='Ezra'?'kesslercompanies.com':'kesslercompanies.com')}</b> mailbox
+    the moment we link the Microsoft&nbsp;365 account. Nothing here is live until then.
+    <ol>
+      <li>In <code>entra.microsoft.com</code>, register an app <code>K Terminal Mail</code> (this tenant only).</li>
+      <li>Add delegated Graph permissions: <code>Mail.Read</code>, <code>Mail.Send</code>, <code>offline_access</code>, <code>User.Read</code>.</li>
+      <li>Turn ON &ldquo;Allow public client flows&rdquo;.</li>
+      <li>Put the <b>client id</b> + <b>tenant id</b> in <code>.mail_graph_creds</code> (line 1, line 2).</li>
+      <li>Run <code>python mail_graph.py login</code> once and enter the code it shows.</li>
+    </ol>
+    Then this panel lights up with the inbox, reading pane, and compose/send — same for both of you.`;
+}
+async function loadInbox(force){
+  const setup=document.getElementById("msg-setup"), split=document.getElementById("msg-split");
+  const list=document.getElementById("msg-list"), acct=document.getElementById("msg-acct");
+  document.getElementById("msg-compose-btn").style.display=window.MAIL_READY?"":"none";
+  document.getElementById("msg-refresh").style.display=window.MAIL_READY?"":"none";
+  if(!window.MAIL_READY){ split.style.display="none"; setup.style.display=""; setup.innerHTML=msgSetupHtml(); acct.textContent=""; return; }
+  setup.style.display="none"; split.style.display="";
+  if(force||!msgState.list.length) list.innerHTML=`<div class="msg-empty">Loading…</div>`;
+  try{
+    const r=await fetch(`/api/mail/messages?folder=${msgState.folder}&top=30`);
+    const d=await r.json();
+    if(!d.configured){ split.style.display="none"; setup.style.display=""; setup.innerHTML=msgSetupHtml(); return; }
+    msgState.loaded=true; msgState.acct=d.email; msgState.list=d.messages||[];
+    acct.textContent=d.email?("— "+d.email):"";
+    if(d.error){ list.innerHTML=`<div class="msg-empty">Couldn't load mail:<br>${esc(d.error)}</div>`; return; }
+    renderMsgList();
+  }catch(e){ list.innerHTML=`<div class="msg-empty">Network error loading mail.</div>`; }
+}
+function fmtMsgDate(iso){
+  if(!iso) return "";
+  const d=new Date(iso), now=new Date();
+  const sameDay=d.toDateString()===now.toDateString();
+  if(sameDay) return d.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+  const yr=d.getFullYear()===now.getFullYear();
+  return d.toLocaleDateString([], yr?{month:"short",day:"numeric"}:{month:"short",day:"numeric",year:"2-digit"});
+}
+function renderMsgList(){
+  const list=document.getElementById("msg-list");
+  if(!msgState.list.length){ list.innerHTML=`<div class="msg-empty">No messages in this folder.</div>`; return; }
+  list.innerHTML=msgState.list.map(m=>{
+    const who=esc(m.from.name||m.from.email||"(unknown sender)");
+    return `<div class="msg-item ${m.unread?'unread':''} ${msgState.sel===m.id?'sel':''}" onclick="openMsg('${m.id}')">
+      <div class="mi-top"><span class="mi-from">${m.unread?'<span class="mi-dot">•</span>':''}${who}</span><span class="mi-date">${fmtMsgDate(m.received)}</span></div>
+      <div class="mi-subj">${esc(m.subject)}</div>
+      <div class="mi-prev">${esc(m.preview||"")}</div></div>`;
+  }).join("");
+}
+async function openMsg(id){
+  msgState.sel=id; renderMsgList();
+  const pane=document.getElementById("msg-read");
+  pane.innerHTML=`<div class="msg-empty">Opening…</div>`;
+  try{
+    const r=await fetch(`/api/mail/message?id=${encodeURIComponent(id)}`);
+    const d=await r.json();
+    if(!d.message){ pane.innerHTML=`<div class="msg-empty">${esc(d.error||"Could not open message.")}</div>`; return; }
+    const m=d.message, frm=m.from||{}, addr=a=>esc(a.name?`${a.name} <${a.email}>`:(a.email||""));
+    const bodyHtml=(m.bodyType==="html")
+      ? `<iframe class="msg-frame" sandbox="" srcdoc="${esc(m.body)}"></iframe>`
+      : `<div class="msg-rd-body">${esc(m.body).replace(/\n/g,"<br>")}</div>`;
+    pane.innerHTML=`
+      <div class="msg-rd-actions"><button class="btn" onclick="msgReply()">↩ Reply</button></div>
+      <div class="msg-rd-subj">${esc(m.subject)}</div>
+      <div class="msg-rd-meta"><b>From:</b> ${addr(frm)}<br>
+        <b>To:</b> ${(m.to||[]).map(addr).join(", ")||"—"}<br>
+        <span>${new Date(m.received).toLocaleString()}</span></div>
+      ${bodyHtml}`;
+    // remember the open message for Reply
+    msgState.open={from:frm.email||"",subject:m.subject||""};
+    const fr=pane.querySelector(".msg-frame"); if(fr){ fr.style.width="100%"; fr.style.minHeight="52vh"; fr.style.border="0"; fr.style.background="#fff"; fr.style.borderRadius="4px"; }
+  }catch(e){ pane.innerHTML=`<div class="msg-empty">Network error opening message.</div>`; }
+}
+function msgReply(){
+  const o=msgState.open||{};
+  const subj=(o.subject||"").replace(/^\s*re:\s*/i,"");
+  msgCompose({to:o.from||"", subject:subj?("Re: "+subj):""});
+}
+function msgCompose(pre){
+  pre=pre||{};
+  msgState.sel=null; renderMsgList();
+  const pane=document.getElementById("msg-read");
+  pane.innerHTML=`
+    <div class="msg-rd-subj">New message</div>
+    <div class="msg-form">
+      <label>To</label><input id="mc-to" value="${esc(pre.to||"")}" placeholder="name@example.com, another@…">
+      <label>Cc</label><input id="mc-cc" value="${esc(pre.cc||"")}" placeholder="optional">
+      <label>Subject</label><input id="mc-subj" value="${esc(pre.subject||"")}">
+      <label>Message</label><textarea id="mc-body" placeholder="Write your message…">${esc(pre.body||"")}</textarea>
+      <div class="msg-send-row">
+        <button class="btn navbtn-brief" onclick="msgSend()">Send ▶</button>
+        <button class="btn" onclick="document.getElementById('msg-read').innerHTML='<div class=&quot;msg-empty&quot;>Select a message to read it here.</div>'">Cancel</button>
+        <span class="msg-note" id="mc-note">Sends from ${esc(msgState.acct||"your mailbox")}.</span>
+      </div>
+    </div>`;
+  const t=document.getElementById("mc-to"); if(t&&!pre.to) t.focus();
+}
+async function msgSend(){
+  const to=document.getElementById("mc-to").value.trim();
+  const note=document.getElementById("mc-note");
+  if(!to){ note.textContent="Add at least one recipient."; note.style.color="var(--red)"; return; }
+  const payload={to, cc:document.getElementById("mc-cc").value.trim(),
+    subject:document.getElementById("mc-subj").value, body:document.getElementById("mc-body").value};
+  note.textContent="Sending…"; note.style.color="var(--dim)";
+  try{
+    const r=await fetch("/api/mail/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const d=await r.json();
+    if(d.ok){ note.textContent="✓ Sent."; note.style.color="var(--green)";
+      setTimeout(()=>{ document.getElementById("msg-read").innerHTML='<div class="msg-empty">Message sent.</div>'; if(msgState.folder==="sentitems") loadInbox(true); },700); }
+    else{ note.textContent="Send failed: "+(d.error||"unknown"); note.style.color="var(--red)"; }
+  }catch(e){ note.textContent="Network error sending."; note.style.color="var(--red)"; }
 }
 
 /* ---- Daily Brief: Gemini reads monitor + news + research ---- */

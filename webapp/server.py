@@ -34,6 +34,10 @@ try:                           # read-only Schwab market data (option chains); o
     import schwab_md as smd    # noqa: E402
 except Exception:
     smd = None
+try:                           # Microsoft 365 mail for the MESSAGES panel; optional
+    import mail_graph as mail  # noqa: E402
+except Exception:
+    mail = None
 
 
 # ---- Gemini API key (AI summaries) -----------------------------------------
@@ -416,6 +420,66 @@ async def api_options(request):
         return web.json_response(chain)
     except Exception as e:
         return web.json_response({"configured": True, "error": str(e)[:200]}, status=502)
+
+
+# ---- MESSAGES: Microsoft 365 mailbox (read + send) ------------------------
+# Gated on mail.is_configured(): until the kesslercompanies.com mailbox is linked
+# (client/tenant id in .mail_graph_creds + a one-time `python mail_graph.py login`),
+# every endpoint returns configured:false so the panel shows a "connect" message.
+def _mail_ready():
+    return mail is not None and mail.is_configured()
+
+
+async def api_mail_status(request):
+    return web.json_response({"configured": _mail_ready(),
+                              "email": mail.account_email() if _mail_ready() else None})
+
+
+async def api_mail_messages(request):
+    if not _mail_ready():
+        return web.json_response({"configured": False, "messages": []})
+    folder = request.query.get("folder", "inbox")
+    try:
+        top = max(1, min(int(request.query.get("top", 25)), 50))
+    except ValueError:
+        top = 25
+    try:
+        msgs = await mail.list_messages(request.app["session"], folder, top)
+        return web.json_response({"configured": True, "folder": folder,
+                                  "email": mail.account_email(), "messages": msgs})
+    except Exception as e:
+        return web.json_response({"configured": True, "error": str(e)[:200]}, status=502)
+
+
+async def api_mail_message(request):
+    if not _mail_ready():
+        return web.json_response({"configured": False}, status=404)
+    mid = request.query.get("id")
+    if not mid:
+        return web.json_response({"error": "missing id"}, status=400)
+    try:
+        return web.json_response({"configured": True,
+                                  "message": await mail.get_message(request.app["session"], mid)})
+    except Exception as e:
+        return web.json_response({"configured": True, "error": str(e)[:200]}, status=502)
+
+
+async def api_mail_send(request):
+    if not _mail_ready():
+        return web.json_response({"configured": False, "error": "mailbox not linked"}, status=404)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad request"}, status=400)
+    to = data.get("to", "")
+    if not (to and str(to).strip()):
+        return web.json_response({"error": "no recipient"}, status=400)
+    try:
+        await mail.send_message(request.app["session"], to,
+                                data.get("subject", ""), data.get("body", ""), data.get("cc"))
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)[:200]}, status=502)
 
 
 # ---- symbol search: company name -> ticker suggestions -------------------
@@ -2392,13 +2456,15 @@ async def index(request):
         app_name = ""
     app_name = app_name or "Kessler-Katznelson Terminal"
     cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
-           "window.NATIVE_PDF=%s;window.APP_VERSION=%s;window.OPTIONS_READY=%s;</script>") % (
+           "window.NATIVE_PDF=%s;window.APP_VERSION=%s;window.OPTIONS_READY=%s;"
+           "window.MAIL_READY=%s;</script>") % (
         "true" if os.environ.get("MKT_NO_PORT") else "false",
         "true" if local_tools else "false",
         json.dumps(share_to),
         "true" if native_pdf else "false",
         json.dumps(app_version),
-        "true" if (smd and smd.is_configured()) else "false")   # Schwab options wired up here?
+        "true" if (smd and smd.is_configured()) else "false",   # Schwab options wired up here?
+        "true" if (mail and mail.is_configured()) else "false")  # M365 mailbox linked yet?
     # security: on the gated cloud app, log every authenticated open under a stable
     # per-device cookie (name if known, else "unknown") with its browser + IP, so each
     # physical device shows up separately and any device that isn't Robert/Ezra stands out
@@ -2565,6 +2631,10 @@ def make_app():
     app.router.add_get("/api/symsearch", api_symsearch)
     app.router.add_get("/api/financials", api_financials)
     app.router.add_get("/api/options", api_options)
+    app.router.add_get("/api/mail/status", api_mail_status)
+    app.router.add_get("/api/mail/messages", api_mail_messages)
+    app.router.add_get("/api/mail/message", api_mail_message)
+    app.router.add_post("/api/mail/send", api_mail_send)
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)
     app.router.add_get("/api/news_board", api_news_board)
