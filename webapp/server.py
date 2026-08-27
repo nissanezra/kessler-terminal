@@ -2044,6 +2044,49 @@ def _bond_price(coupon, years, ytm, freq=2):
     return sum(c / (1 + y) ** t for t in range(1, n + 1)) + 100 / (1 + y) ** n
 
 
+def _coupon_schedule(maturity):
+    """All semiannual coupon dates (descending 6-month steps back from maturity)."""
+    ds, d = [], maturity
+    for _ in range(80):
+        ds.append(d)
+        m, y = d.month - 6, d.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        try:
+            d = d.replace(year=y, month=m)
+        except ValueError:               # e.g. no such day; clamp (rare for the 15th/30th)
+            d = d.replace(year=y, month=m, day=28)
+    return sorted(ds)
+
+
+def _treasury_ytm(coupon, maturity, price, settle):
+    """Street-convention yield to maturity: real coupon dates, actual/actual accrued,
+    fractional first period. `maturity`/`settle` are date objects, `price` is clean."""
+    sched = _coupon_schedule(maturity)
+    future = [d for d in sched if d > settle]
+    if not future:
+        return coupon
+    prev = max(d for d in sched if d <= settle)
+    nxt = future[0]
+    period = (nxt - prev).days or 182
+    w = (nxt - settle).days / period                 # fraction of current period left
+    c = coupon / 2.0
+    accrued = c * ((settle - prev).days / period)    # actual/actual
+    dirty = price + accrued
+    lo, hi = 0.0, 0.25
+    for _ in range(200):
+        y = (lo + hi) / 2
+        r = y / 2
+        pv = sum((c + (100 if cd == maturity else 0)) / (1 + r) ** (w + i)
+                 for i, cd in enumerate(future))
+        if pv > dirty:
+            lo = y                                   # PV too high -> raise yield
+        else:
+            hi = y
+    return (lo + hi) / 2 * 100
+
+
 def _implied_ytm(coupon, years, price, freq=2):
     """Invert _bond_price: the yield that reproduces a given clean price (bisection)."""
     if years <= 0:
@@ -2093,10 +2136,11 @@ async def api_portfolio(request):
         tre_coupon += face * coup / 100
         if nt.get("price") is not None:            # exact broker price; day-change marked live
             px = float(nt["price"])
-            ytxt = _implied_ytm(coup, years, px)
+            settle = (now + timedelta(days=1)).date()          # T+1 Treasury settlement
+            ytxt = _treasury_ytm(coup, mat.date(), px, settle)  # street-convention yield
             _, dchg = _yield(_tenor_sym(years))    # nearest benchmark's daily yield move
             mv = px / 100 * face
-            dval = (px - _bond_price(coup, years, ytxt - dchg)) / 100 * face
+            dval = (px - _bond_price(coup, years, _implied_ytm(coup, years, px) - dchg)) / 100 * face
         elif nt.get("ytm") is not None:            # stated yield (held at that level, not marked live)
             ytxt = float(nt["ytm"])
             px = _bond_price(coup, years, ytxt)
