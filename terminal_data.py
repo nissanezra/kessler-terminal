@@ -491,6 +491,13 @@ async def fetch_history(session, ticker, tf="1Y", custom=None):
     # bars, whereas FRED's DGS-series lag a business day and have no 1D. Use CNBC so the
     # chart shows today's yield and 1D works. (FRED still serves fed funds / spreads.)
     if re.fullmatch(r"US\d+[MY]", ticker.upper()):
+        # CNBC carries today's yield + intraday but only ~a few years of history. For a
+        # custom date window or ALL, use FRED's DGS series (decades of daily data) so deep
+        # ranges (e.g. 2007-2009) aren't empty; standard/short ranges stay on CNBC so 1D
+        # and today's live yield keep working.
+        frd = resolve_fred(ticker.upper())
+        if frd and (custom or tf == "ALL"):
+            return await _fred_hist(session, frd[0], tf, custom)
         return await _cnbc_hist(session, ticker.upper(), tf, custom)
     fr = resolve_fred(ticker)
     if fr:
