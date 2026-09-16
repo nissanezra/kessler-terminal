@@ -481,6 +481,19 @@
   .msg-note{color:var(--dim);font-size:12px;}
   @media (max-width:820px){ .msg-split{grid-template-columns:1fr;height:auto;}
     .msg-read{min-height:320px;} }
+  /* Bloomberg-style new-message pop-up */
+  #msg-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-160%);
+    z-index:99999;background:#000;border:1px solid var(--amber);border-radius:6px;
+    padding:9px 16px 10px;min-width:230px;max-width:min(90vw,440px);cursor:pointer;
+    box-shadow:0 8px 30px rgba(0,0,0,.7);opacity:0;
+    transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .28s ease;}
+  #msg-toast.show{transform:translateX(-50%) translateY(0);opacity:1;}
+  #msg-toast .mt-hd{color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.05em;
+    display:flex;align-items:center;gap:7px;}
+  #msg-toast .mt-from{color:var(--white);font-size:14px;font-weight:700;margin-top:5px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #msg-toast .mt-subj{color:var(--price);font-size:12.5px;margin-top:2px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 </style>
 </head>
 <body>
@@ -1948,6 +1961,55 @@ async function msgSend(){
     else{ note.textContent="Send failed: "+(d.error||"unknown"); note.style.color="var(--red)"; }
   }catch(e){ note.textContent="Network error sending."; note.style.color="var(--red)"; }
 }
+
+/* ---------------- Bloomberg-style new-message pop-up ---------------- */
+let _mailSeen=null, _mailTimer=null, _toastHideT=null;
+function showMsgToast(from, subject){
+  let t=document.getElementById("msg-toast");
+  if(!t){ t=document.createElement("div"); t.id="msg-toast";
+    t.onclick=()=>{ hideMsgToast(); showMessages(); };
+    document.body.appendChild(t); }
+  t.innerHTML=`<div class="mt-hd">✉ K TERMINAL MAIL</div>
+    <div class="mt-from">${esc(from||"New message")}</div>
+    ${subject?`<div class="mt-subj">${esc(subject)}</div>`:""}`;
+  requestAnimationFrame(()=>t.classList.add("show"));
+  clearTimeout(_toastHideT); _toastHideT=setTimeout(hideMsgToast, 8000);
+  // OS-level toast too, so it pops even when the terminal isn't focused (best-effort)
+  try{
+    if("Notification" in window && Notification.permission==="granted" && document.hidden){
+      const n=new Notification("K Terminal Mail",{body:(from?from+" — ":"")+(subject||"New message")});
+      n.onclick=()=>{ try{window.focus();}catch(e){} showMessages(); n.close(); };
+    }
+  }catch(e){}
+}
+function hideMsgToast(){ const t=document.getElementById("msg-toast"); if(t)t.classList.remove("show"); }
+async function pollMail(){
+  if(!window.MAIL_READY) return;
+  try{
+    const d=await(await fetch("/api/mail/messages?folder=inbox&top=10")).json();
+    if(!d.configured || !Array.isArray(d.messages)) return;
+    const ids=d.messages.map(m=>m.id);
+    if(_mailSeen===null){ _mailSeen=new Set(ids); return; }   // baseline: don't toast existing mail
+    const fresh=d.messages.filter(m=>!_mailSeen.has(m.id));
+    fresh.forEach(m=>_mailSeen.add(m.id));
+    const notify=fresh.filter(m=>m.unread);
+    if(notify.length){
+      const m=notify[0], who=(m.from&&(m.from.name||m.from.email))||"New message";
+      showMsgToast(notify.length>1?`${who}  (+${notify.length-1} more)`:who, m.subject);
+    }
+  }catch(e){}
+}
+function startMailNotify(){
+  if(!window.MAIL_READY) return;
+  if("Notification" in window && Notification.permission==="default"){
+    try{ Notification.requestPermission(); }catch(e){}   // enable background OS toasts
+  }
+  clearInterval(_mailTimer);
+  pollMail();                                  // baseline the current inbox now
+  _mailTimer=setInterval(pollMail, 45000);     // then check every 45s
+}
+startMailNotify();
+window._testMsgToast=()=>showMsgToast("Robert Kessler","Re: Rosenberg — Breakfast with Dave");
 
 /* ---- Daily Brief: Gemini reads monitor + news + research ---- */
 let dailyLoaded=false;
