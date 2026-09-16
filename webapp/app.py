@@ -1,4 +1,4 @@
-"""Desktop launcher for the Kessler-Katznelson web terminal.
+"""Desktop launcher for the K Terminal web terminal.
 
 Runs the aiohttp web app on a background thread and shows it in a native window
 (pywebview). If no native webview is available — e.g. an old Windows box with no
@@ -82,7 +82,7 @@ def main():
             _title = (HERE.parent / "appname.txt").read_text(encoding="utf-8").strip()
         except Exception:
             _title = ""
-        webview.create_window(_title or "Kessler-Katznelson Terminal", url,
+        webview.create_window(_title or "K Terminal", url,
                               width=1600, height=1000, min_size=(1100, 700))
         if sys.platform.startswith("win"):
             webview.start(gui="edgechromium")  # require modern WebView2; raises if absent

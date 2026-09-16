@@ -2368,7 +2368,7 @@ def _auth_token():
 
 _LOGIN_HTML = """<!doctype html><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Kessler-Katznelson Terminal</title>
+<title>K Terminal</title>
 <style>html,body{height:100%;margin:0;background:#0a0a0a;color:#e0a63c;
 font:15px/1.5 ui-monospace,Menlo,monospace;display:flex;align-items:center;justify-content:center}
 form{text-align:center;padding:28px 30px;border:1px solid #4a3a15;border-radius:8px;background:#111}
@@ -2379,7 +2379,7 @@ button{margin-top:12px;display:block;width:100%;background:#e0a63c;color:#000;bo
 padding:10px;border-radius:4px;cursor:pointer;font-family:inherit}
 .err{color:#ff6b6b;font-size:12px;margin-top:10px;min-height:14px}</style>
 <form method="post" action="/login">
-<h1>KESSLER-KATZNELSON TERMINAL</h1>
+<h1>K TERMINAL</h1>
 <input type="password" name="password" placeholder="password" autofocus autocomplete="current-password">
 <button type="submit">Enter</button>
 <div class="err">{{ERR}}</div>
@@ -2454,7 +2454,7 @@ async def index(request):
         app_name = (HERE.parent / "appname.txt").read_text(encoding="utf-8").strip()
     except Exception:
         app_name = ""
-    app_name = app_name or "Kessler-Katznelson Terminal"
+    app_name = app_name or "K Terminal"
     cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
            "window.NATIVE_PDF=%s;window.APP_VERSION=%s;window.OPTIONS_READY=%s;"
            "window.MAIL_READY=%s;</script>") % (
@@ -2491,8 +2491,8 @@ async def index(request):
 
 
 _MANIFEST_BASE = {
-    "name": "Kessler-Katznelson Terminal",
-    "short_name": "Kessler-Katznelson",
+    "name": "K Terminal",
+    "short_name": "K Terminal",
     "scope": "/",
     "display": "standalone",
     "orientation": "any",
@@ -2694,7 +2694,7 @@ if __name__ == "__main__":
         sys.exit(0)
     host = os.environ.get("MKT_HOST", "127.0.0.1")   # 0.0.0.0 = LAN/phone access
     port = int(os.environ.get("MKT_PORT") or os.environ.get("PORT") or "8787")
-    print(f"  Kessler-Katznelson web  ->  http://127.0.0.1:{port}", flush=True)
+    print(f"  K Terminal web  ->  http://127.0.0.1:{port}", flush=True)
     if host == "0.0.0.0":
         ip = _lan_ip()
         if ip:
