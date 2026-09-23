@@ -1341,8 +1341,11 @@ NEWS_SECTIONS = [
     ("MARKETS", "cnbc", "15839135"),
     ("ECONOMY", "cnbc", "20910258"),
     ("ECONOMIC RELEASES", "google",
-     'CPI OR "nonfarm payrolls" OR "jobless claims" OR JOLTS OR "retail sales" '
-     'OR "GDP report" OR PPI OR "PCE inflation" OR "unemployment rate"'),
+     # national scheduled releases only. NB: no bare "unemployment rate" — it pulls in
+     # dozens of state/county BLS stories that bury the real prints. PMI/ISM added.
+     'PMI OR ISM OR CPI OR "PCE inflation" OR PPI OR "nonfarm payrolls" '
+     'OR "jobless claims" OR JOLTS OR "retail sales" OR "GDP report" '
+     'OR "durable goods orders" OR "consumer confidence" OR "housing starts"'),
     ("FINANCE", "cnbc", "10000664"),
     ("TECHNOLOGY", "cnbc", "19854910"),
     ("ENERGY", "cnbc", "19836768"),
