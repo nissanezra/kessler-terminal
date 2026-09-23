@@ -384,6 +384,7 @@
     background:#1a1a1a;border:1px solid #333;padding:2px 7px;font-size:11px;
     white-space:nowrap;line-height:1.4;}
   .xtip .td{color:var(--white);font-weight:700;margin-right:8px;} .xtip .tv{color:var(--amber);font-weight:700;}
+  .xtip .tr{color:#34c3d6;font-weight:700;margin-left:8px;}
   @media print{
     #titlebar,.btn,.tfbar,#cf-daterow,#sec-daterow{display:none!important;}
     html,body{background:#fff!important;}
@@ -914,11 +915,22 @@ function getChart(id){
     const pd=param.time&&param.seriesData&&param.seriesData.get(sPrice);
     if(!pd){hide();return;}
     const val=pd.value!==undefined?pd.value:pd.close;
-    const x=chart.timeScale().timeToCoordinate(param.time), y=sPrice.priceToCoordinate(val);
+    // RSI reading at this point (when the RSI sub-panel is on)
+    const rd=indOn.rsi&&param.seriesData?param.seriesData.get(sRsi):null;
+    const rsiVal=(rd&&rd.value!==undefined)?rd.value:null;
+    const x=chart.timeScale().timeToCoordinate(param.time);
+    const priceY=sPrice.priceToCoordinate(val);
+    const rsiY=(rsiVal!=null)?sRsi.priceToCoordinate(rsiVal):null;
+    const py=param.point?param.point.y:null;
+    // snap the little cross to whichever line the pointer is nearest (price vs RSI)
+    let y=priceY;
+    if(rsiY!=null&&py!=null&&Math.abs(py-rsiY)<Math.abs(py-priceY))y=rsiY;
     if(x==null||y==null){hide();return;}
     cross.style.left=x+"px"; cross.style.top=y+"px"; cross.style.display="block";
-    tip.innerHTML=`<span class="td">${xtipDate(param.time)}</span>`
+    let html=`<span class="td">${xtipDate(param.time)}</span>`
       +`<span class="tv">${val.toLocaleString(undefined,{maximumFractionDigits:2})}</span>`;
+    if(rsiVal!=null)html+=`<span class="tr">RSI ${rsiVal.toFixed(1)}</span>`;
+    tip.innerHTML=html;
     tip.style.display="block";
     const hw=host.clientWidth, hh=host.clientHeight, tw=tip.offsetWidth, th=tip.offsetHeight;
     tip.style.left=((x+14+tw>hw)?x-tw-14:x+14)+"px";
