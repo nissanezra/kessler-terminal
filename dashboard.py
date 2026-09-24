@@ -102,6 +102,12 @@ SECTIONS = [
         ("SWISS SMI", ".SSMI"), ("NIKKEI", ".N225"), ("HANG SENG", ".HSI"),
         ("SHANGHAI", ".SSEC"), ("KOSPI", ".KS11"),
     ]),
+    (2, "WORLD RATES", "cnbc", [
+        ("GERMANY 10Y", "DE10Y-DE", 3), ("UK 10Y", "GB10Y-GB", 3),
+        ("SPAIN 10Y", "ES10Y-ES", 3), ("PORTUGAL 10Y", "PT10Y-PT", 3),
+        ("ITALY 10Y", "IT10Y-IT", 3), ("GREECE 10Y", "GR10Y-GR", 3),
+        ("JAPAN 10Y", "JP10Y-JP", 3),
+    ]),
     (2, "THEMATIC ETFs", "cnbc", [
         ("SBIO BIOTECH", "SBIO"), ("EUAD DEFENSE", "EUAD"), ("URA URANIUM", "URA"),
         ("AAXJ ASIA", "AAXJ"), ("CRAK REFINERS", "CRAK"), ("COPX COPPER", "COPX"),
