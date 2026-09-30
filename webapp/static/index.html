@@ -2065,7 +2065,7 @@ function showShareToast(by, title){
   t.innerHTML=`<div class="st-hd">&#128196; ${esc((by||"Someone").toUpperCase())} SHARED AN ARTICLE</div>`
     +(title?`<div class="st-title">${esc(title)}</div>`:"");
   requestAnimationFrame(()=>t.classList.add("show"));
-  clearTimeout(_shareHideT); _shareHideT=setTimeout(hideShareToast, 9000);
+  // stays (and keeps pulsing) until clicked — a shared article shouldn't be missed
   try{ if("Notification" in window && Notification.permission==="granted" && document.hidden){
     const n=new Notification("K Terminal — Shared",{body:(by?by+" shared: ":"")+(title||"an article")});
     n.onclick=()=>{ try{window.focus();}catch(e){} showShared(); n.close(); }; } }catch(e){}
