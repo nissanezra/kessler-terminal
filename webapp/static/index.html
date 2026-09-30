@@ -507,7 +507,8 @@
   /* red "shared an article" pop-up */
   #share-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-170%);
     z-index:99999;background:#1c0707;border:1px solid #e0403a;border-radius:6px;
-    padding:9px 16px 10px;min-width:250px;max-width:min(90vw,470px);cursor:pointer;
+    padding:9px 16px 10px;min-width:250px;max-width:min(90vw,470px);cursor:move;
+    user-select:none;touch-action:none;
     box-shadow:0 8px 30px rgba(150,0,0,.55);opacity:0;
     transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .28s ease;}
   #share-toast.show{transform:translateX(-50%) translateY(0);opacity:1;
@@ -2060,17 +2061,29 @@ let _sharedSeen=null, _shareTimer=null, _shareHideT=null;
 function showShareToast(by, title){
   let t=document.getElementById("share-toast");
   if(!t){ t=document.createElement("div"); t.id="share-toast";
-    t.onclick=()=>{ hideShareToast(); showShared(); };
-    document.body.appendChild(t); }
-  t.innerHTML=`<div class="st-hd">&#128196; ${esc((by||"Someone").toUpperCase())} SHARED AN ARTICLE</div>`
+    document.body.appendChild(t); _makeToastDraggable(t); }
+  t.innerHTML=`<div class="st-hd">${esc((by||"Someone").toUpperCase())} SHARED AN ARTICLE</div>`
     +(title?`<div class="st-title">${esc(title)}</div>`:"");
   requestAnimationFrame(()=>t.classList.add("show"));
-  // stays (and keeps pulsing) until clicked — a shared article shouldn't be missed
+  // stays (and keeps pulsing) until clicked; drag to move — a shared article shouldn't be missed
   try{ if("Notification" in window && Notification.permission==="granted" && document.hidden){
     const n=new Notification("K Terminal — Shared",{body:(by?by+" shared: ":"")+(title||"an article")});
     n.onclick=()=>{ try{window.focus();}catch(e){} showShared(); n.close(); }; } }catch(e){}
 }
 function hideShareToast(){ const t=document.getElementById("share-toast"); if(t)t.classList.remove("show"); }
+function _makeToastDraggable(t){
+  let sx,sy,ox,oy,moved=0,dragging=false;
+  t.addEventListener("pointerdown",e=>{
+    dragging=true; moved=0; const r=t.getBoundingClientRect(); ox=r.left; oy=r.top; sx=e.clientX; sy=e.clientY;
+    t.style.transform="none"; t.style.left=ox+"px"; t.style.top=oy+"px";   // pin to current spot, drop centering
+    try{t.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault();
+  });
+  t.addEventListener("pointermove",e=>{ if(!dragging)return;
+    const dx=e.clientX-sx, dy=e.clientY-sy; moved=Math.max(moved,Math.abs(dx)+Math.abs(dy));
+    t.style.left=(ox+dx)+"px"; t.style.top=(oy+dy)+"px"; });
+  t.addEventListener("pointerup",()=>{ if(!dragging)return; dragging=false;
+    if(moved<5){ hideShareToast(); showShared(); } });   // a tap (not a drag) dismisses + opens SHARED
+}
 async function pollShared(){
   const other=window.SHARE_TO; if(!other||other==="team") return;   // only alert on the OTHER person's shares
   try{
