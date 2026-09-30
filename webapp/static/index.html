@@ -504,6 +504,16 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   #msg-toast .mt-subj{color:var(--price);font-size:12.5px;margin-top:2px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  /* red "shared an article" pop-up */
+  #share-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-170%);
+    z-index:99999;background:#1c0707;border:1px solid #e0403a;border-radius:6px;
+    padding:9px 16px 10px;min-width:250px;max-width:min(90vw,470px);cursor:pointer;
+    box-shadow:0 8px 30px rgba(150,0,0,.55);opacity:0;
+    transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .28s ease;}
+  #share-toast.show{transform:translateX(-50%) translateY(0);opacity:1;}
+  #share-toast .st-hd{color:#ff5a4d;font-size:12px;font-weight:700;letter-spacing:.05em;}
+  #share-toast .st-title{color:#fff;font-size:14px;font-weight:700;margin-top:5px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 </style>
 </head>
 <body>
@@ -2040,6 +2050,40 @@ function startMailNotify(){
 startMailNotify();
 window._testMsgToast=()=>showMsgToast("Robert Kessler","Re: Rosenberg — Breakfast with Dave");
 
+/* ---- red "shared an article" pop-up (fires when the OTHER person shares) ---- */
+let _sharedSeen=null, _shareTimer=null, _shareHideT=null;
+function showShareToast(by, title){
+  let t=document.getElementById("share-toast");
+  if(!t){ t=document.createElement("div"); t.id="share-toast";
+    t.onclick=()=>{ hideShareToast(); showShared(); };
+    document.body.appendChild(t); }
+  t.innerHTML=`<div class="st-hd">&#128196; ${esc((by||"Someone").toUpperCase())} SHARED AN ARTICLE</div>`
+    +(title?`<div class="st-title">${esc(title)}</div>`:"");
+  requestAnimationFrame(()=>t.classList.add("show"));
+  clearTimeout(_shareHideT); _shareHideT=setTimeout(hideShareToast, 9000);
+  try{ if("Notification" in window && Notification.permission==="granted" && document.hidden){
+    const n=new Notification("K Terminal — Shared",{body:(by?by+" shared: ":"")+(title||"an article")});
+    n.onclick=()=>{ try{window.focus();}catch(e){} showShared(); n.close(); }; } }catch(e){}
+}
+function hideShareToast(){ const t=document.getElementById("share-toast"); if(t)t.classList.remove("show"); }
+async function pollShared(){
+  const other=window.SHARE_TO; if(!other||other==="team") return;   // only alert on the OTHER person's shares
+  try{
+    const d=await(await fetch("/api/shared")).json();
+    const items=(d&&d.items)||[];
+    const key=it=>(it.link||it.title||"")+"|"+(it.at||"");
+    if(_sharedSeen===null){ _sharedSeen=new Set(items.map(key)); return; }   // baseline existing
+    const fresh=items.filter(it=>!_sharedSeen.has(key(it)));
+    fresh.forEach(it=>_sharedSeen.add(key(it)));
+    const fromOther=fresh.filter(it=>(it.by||"")===other);
+    if(fromOther.length){ const it=fromOther[0], ttl=it.title||it.link||"an article";
+      showShareToast(it.by, fromOther.length>1?`${ttl}  (+${fromOther.length-1} more)`:ttl); }
+  }catch(e){}
+}
+function startShareNotify(){ clearInterval(_shareTimer); pollShared(); _shareTimer=setInterval(pollShared, 40000); }
+startShareNotify();
+window._testShareToast=()=>showShareToast("Ezra","A Brutal Bond Market — A Wealth of Common Sense");
+
 /* ---- Daily Brief: Gemini reads monitor + news + research ---- */
 let dailyLoaded=false;
 function showDaily(){ show("dailyview"); if(!dailyLoaded) loadDaily(false); }
@@ -2269,8 +2313,9 @@ async function shareCurrent(){
   if(!s||(!s.title&&!s.link&&!s.file)){flashToast("Nothing to share");return;}
   btn.classList.add("busy"); const old=btn.textContent; btn.textContent="Sharing…";
   try{
+    const me=(window.SHARE_TO==="Robert")?"Ezra":(window.SHARE_TO==="Ezra")?"Robert":"";
     const r=await fetch("/api/share",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(s)});
+      body:JSON.stringify({...s, by:me})});
     const d=await r.json();
     flashToast(d&&d.ok?`Shared with ${window.SHARE_TO||"the desk"}`:"Couldn't share");
   }catch(e){ flashToast("Couldn't share"); }

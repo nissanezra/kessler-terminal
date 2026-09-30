@@ -636,7 +636,9 @@ SHARED_FILE = RESEARCH_DIR / ".shared.json"
 
 
 async def api_share(request):
-    """Save a news article / report to the shared list the other terminal reads."""
+    """Save a shared item. On a desktop build (mirror configured) forward it to the shared
+    cloud backend so the OTHER person's terminal actually receives it; the cloud app itself
+    writes locally to SHARED_FILE."""
     try:
         body = await request.json()
     except Exception:
@@ -645,7 +647,20 @@ async def api_share(request):
     link = (body.get("link") or "").strip()[:1000]
     if not title and not link:
         return web.json_response({"error": "nothing to share"}, status=400)
-    by = (request.cookies.get("kkt_name") or "someone").strip()[:40] or "someone"
+    # sharer name: frontend sends `by` (desktop has no login cookie), else the cookie
+    by = ((body.get("by") or request.cookies.get("kkt_name") or "someone").strip()[:40]) or "someone"
+    cfg = _mirror_cfg()
+    if cfg:                                   # desktop -> relay to the shared cloud list
+        url, key = cfg
+        s = request.app["session"]
+        try:
+            await s.get(f"{url}/api/shared", params={"k": key},         # authenticate the session
+                        timeout=aiohttp.ClientTimeout(total=15))
+            async with s.post(f"{url}/api/share", json={**body, "by": by},
+                              timeout=aiohttp.ClientTimeout(total=20)) as r:
+                return web.json_response(await r.json(content_type=None), status=r.status)
+        except Exception as e:
+            return web.json_response({"error": str(e)[:200]}, status=502)
     item = {"title": title, "link": link,
             "source": (body.get("source") or "").strip()[:80],
             "kind": (body.get("kind") or "article").strip()[:20],
@@ -669,7 +684,21 @@ async def api_share(request):
 
 
 async def api_shared(request):
-    """The shared list, newest first, with a compact age on each item."""
+    """The shared list, newest first. Desktop reads it from the shared cloud backend so both
+    people see the same list; the cloud app reads its own SHARED_FILE."""
+    cfg = _mirror_cfg()
+    if cfg:                                   # desktop -> read the shared cloud list
+        url, key = cfg
+        try:
+            async with request.app["session"].get(f"{url}/api/shared", params={"k": key},
+                                                   timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 200:
+                    data = await r.json(content_type=None)
+                    if isinstance(data, dict):
+                        return web.json_response(data)
+        except Exception:
+            pass
+        return web.json_response({"items": []})
     try:
         d = json.loads(SHARED_FILE.read_text())
     except Exception:
