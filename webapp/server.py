@@ -2435,12 +2435,15 @@ async def auth_mw(request, handler):
     if request.path.startswith("/static/") or request.path == "/app.webmanifest":
         return await handler(request)
     pw = os.environ.get("MKT_PASSWORD", "")
+    api = os.environ.get("MKT_API_KEY", "")        # stable machine key for desktop sync
     # already-remembered device
     if request.cookies.get("kkt_auth") == token:
         return await handler(request)
-    # magic link: any URL with ?k=<password> remembers this device forever, then
-    # redirects to a clean URL. Bookmark it once and never type the password again.
-    if request.query.get("k", "") == pw:
+    # ?k=<password> is the human magic link; ?k=<MKT_API_KEY> is the desktops' machine key
+    # for mirror/share sync. The machine key is separate so rotating MKT_PASSWORD (to kick a
+    # device) never breaks desktop-to-desktop sync. Either remembers this device.
+    k = request.query.get("k", "")
+    if k and (k == pw or (api and k == api)):
         resp = _set_auth(web.HTTPFound(request.path or "/"), token)
         if request.query.get("u"):     # ?u=<name> on the magic link also sets the greeting
             resp.set_cookie("kkt_name", request.query.get("u"),
@@ -2597,17 +2600,16 @@ async def _research_mirror_loop(app):
     No-op on the cloud source (its own ROSENBERG creds) and when unconfigured."""
     if os.environ.get("ROSENBERG_EMAIL"):         # this IS the source — don't mirror
         return
-    cfg = _mirror_cfg()
-    if not cfg:
-        return
-    url, key = cfg
     import traceback
     while True:
-        try:
-            n = await _mirror_once(app["session"], url, key)
-            print(f"  research mirror: {n} new report(s) from {url}", flush=True)
-        except Exception:
-            print("  research mirror ERROR:\n" + traceback.format_exc(), flush=True)
+        cfg = _mirror_cfg()                        # re-read each cycle so a key refresh self-heals
+        if cfg:
+            url, key = cfg
+            try:
+                n = await _mirror_once(app["session"], url, key)
+                print(f"  research mirror: {n} new report(s) from {url}", flush=True)
+            except Exception:
+                print("  research mirror ERROR:\n" + traceback.format_exc(), flush=True)
         await asyncio.sleep(2 * 3600)             # check every 2h
 
 
