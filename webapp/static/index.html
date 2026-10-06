@@ -517,9 +517,37 @@
     0%,100%{ box-shadow:0 8px 26px rgba(150,0,0,.5), 0 0 0 0 rgba(224,64,58,.6); border-color:#e0403a; }
     50%{ box-shadow:0 8px 40px rgba(230,0,0,.9), 0 0 0 12px rgba(224,64,58,0); border-color:#ff6a5f; }
   }
-  #share-toast .st-hd{color:#ff5a4d;font-size:12px;font-weight:700;letter-spacing:.05em;}
-  #share-toast .st-title{color:#fff;font-size:14px;font-weight:700;margin-top:5px;
+  #share-toast .st-hd,#note-toast .st-hd{color:#ff5a4d;font-size:12px;font-weight:700;letter-spacing:.05em;}
+  #share-toast .st-title,#note-toast .st-title{color:#fff;font-size:14px;font-weight:700;margin-top:5px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  /* NOTES board (shared note thread with the other person) */
+  #note-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-170%);
+    z-index:99999;background:#1c0707;border:1px solid #e0403a;border-radius:6px;
+    padding:9px 16px 10px;min-width:250px;max-width:min(90vw,470px);cursor:move;user-select:none;touch-action:none;
+    box-shadow:0 8px 30px rgba(150,0,0,.55);opacity:0;
+    transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .28s ease;}
+  #note-toast.show{transform:translateX(-50%) translateY(0);opacity:1;animation:shareBeat 1.05s ease-in-out infinite;}
+  .nb-badge{display:none;background:#e0403a;color:#fff;border-radius:9px;font-size:10px;font-weight:700;padding:0 5px;margin-left:4px;}
+  .nb-badge.on{display:inline-block;}
+  .notes-wrap{display:flex;flex-direction:column;height:calc(100vh - var(--hdr-h,110px));max-width:880px;margin:0 auto;}
+  .notes-thread{flex:1;overflow-y:auto;padding:6px 2px;}
+  .note{max-width:80%;margin:12px 0;padding:11px 15px;border-radius:12px;line-height:1.45;word-wrap:break-word;}
+  .note.me{margin-left:auto;background:#17230f;border:1px solid #315c1e;}
+  .note.them{margin-right:auto;background:#2a1d08;border:1px solid #5c4318;}
+  .note .n-by{font-size:12px;font-weight:700;letter-spacing:.05em;margin-bottom:4px;}
+  .note.me .n-by{color:#86df5e;} .note.them .n-by{color:var(--amber);}
+  .note .n-text{color:#fff;font-size:18px;white-space:pre-wrap;}
+  .note .n-meta{font-size:11px;color:var(--dim);margin-top:6px;}
+  .notes-compose{border-top:1px solid #2a2a2a;padding:10px 2px 2px;}
+  .notes-quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:9px;}
+  .nq-btn{background:#141414;border:1px solid #4a3a15;color:var(--amber);font:inherit;font-size:15px;
+    padding:9px 16px;border-radius:22px;cursor:pointer;}
+  .nq-btn:hover{background:var(--amber);color:#000;}
+  .notes-input-row{display:flex;gap:10px;align-items:stretch;}
+  #note-input{flex:1;background:#141414;border:1px solid #3a3a3a;color:#fff;font:inherit;font-size:19px;
+    padding:13px 15px;border-radius:9px;resize:none;min-height:56px;box-sizing:border-box;}
+  #note-send{background:var(--amber);color:#000;border:0;font:inherit;font-weight:800;font-size:19px;
+    padding:0 30px;border-radius:9px;cursor:pointer;letter-spacing:.06em;}
 </style>
 </head>
 <body>
@@ -547,6 +575,7 @@
       <button class="navbtn" onclick="showOptionsNav()">OPTIONS</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn" onclick="showShared()">SHARED</button>
+      <button class="navbtn" onclick="showNotes()">NOTES<span class="nb-badge" id="notes-badge"></span></button>
       <button class="navbtn" onclick="showMessages()">MESSAGES</button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
     </div>
@@ -677,6 +706,23 @@
       <span class="ctitle" style="margin-left:auto">SHARED</span></div>
     <div class="nb-sub" id="sh-sub"></div>
     <div class="news" id="sh-body"></div>
+  </div>
+
+  <div id="notesview" class="view" style="padding:6px 12px;">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" onclick="loadNotes(true)">↻ Refresh</button>
+      <span class="ctitle" id="notes-title" style="margin-left:auto">NOTES</span></div>
+    <div class="notes-wrap">
+      <div class="notes-thread" id="notes-thread"></div>
+      <div class="notes-compose">
+        <div class="notes-quick" id="notes-quick"></div>
+        <div class="notes-input-row">
+          <textarea id="note-input" placeholder="Write a note…" rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendNote();}"></textarea>
+          <button id="note-send" onclick="sendNote()">SEND</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="researchview" class="view" style="padding:6px 12px;">
@@ -2061,7 +2107,7 @@ let _sharedSeen=null, _shareTimer=null, _shareHideT=null;
 function showShareToast(by, title){
   let t=document.getElementById("share-toast");
   if(!t){ t=document.createElement("div"); t.id="share-toast";
-    document.body.appendChild(t); _makeToastDraggable(t); }
+    document.body.appendChild(t); _makeToastDraggable(t, ()=>{ hideShareToast(); showShared(); }); }
   t.innerHTML=`<div class="st-hd">${esc((by||"Someone").toUpperCase())} SHARED AN ARTICLE</div>`
     +(title?`<div class="st-title">${esc(title)}</div>`:"");
   requestAnimationFrame(()=>t.classList.add("show"));
@@ -2071,7 +2117,7 @@ function showShareToast(by, title){
     n.onclick=()=>{ try{window.focus();}catch(e){} showShared(); n.close(); }; } }catch(e){}
 }
 function hideShareToast(){ const t=document.getElementById("share-toast"); if(t)t.classList.remove("show"); }
-function _makeToastDraggable(t){
+function _makeToastDraggable(t, onTap){
   let sx,sy,ox,oy,moved=0,dragging=false;
   t.addEventListener("pointerdown",e=>{
     dragging=true; moved=0; const r=t.getBoundingClientRect(); ox=r.left; oy=r.top; sx=e.clientX; sy=e.clientY;
@@ -2082,7 +2128,7 @@ function _makeToastDraggable(t){
     const dx=e.clientX-sx, dy=e.clientY-sy; moved=Math.max(moved,Math.abs(dx)+Math.abs(dy));
     t.style.left=(ox+dx)+"px"; t.style.top=(oy+dy)+"px"; });
   t.addEventListener("pointerup",()=>{ if(!dragging)return; dragging=false;
-    if(moved<5){ hideShareToast(); showShared(); } });   // a tap (not a drag) dismisses + opens SHARED
+    if(moved<5 && onTap) onTap(); });   // a tap (not a drag) runs the action
 }
 async function pollShared(){
   const other=window.SHARE_TO; if(!other||other==="team") return;   // only alert on the OTHER person's shares
@@ -2101,6 +2147,103 @@ async function pollShared(){
 function startShareNotify(){ clearInterval(_shareTimer); pollShared(); _shareTimer=setInterval(pollShared, 40000); }
 startShareNotify();
 window._testShareToast=()=>showShareToast("Ezra","A Brutal Bond Market — A Wealth of Common Sense");
+
+/* ---------------- NOTES board (dead-simple shared notes with the other person) ---------------- */
+let _notesList=[], _notesSeen=null, _notesTimer=null;
+function _meName(){ return window.SHARE_TO==="Robert"?"Ezra":(window.SHARE_TO==="Ezra"?"Robert":"me"); }
+function _otherName(){ return (window.SHARE_TO&&window.SHARE_TO!=="team")?window.SHARE_TO:"the desk"; }
+function showNotes(){ show("notesview");
+  const ti=document.getElementById("notes-title"); if(ti)ti.textContent="NOTES — you & "+_otherName();
+  renderQuickNotes(); loadNotes(true);
+  if("Notification" in window && Notification.permission==="default"){ try{Notification.requestPermission();}catch(e){} }
+  setTimeout(()=>{ markNotesSeen(); updateNotesBadge(_notesList); }, 400);
+}
+function renderQuickNotes(){
+  const q=document.getElementById("notes-quick");
+  ["Call me","On a call","Look at the market","Will do","👍 OK"].forEach; // presets
+  q.innerHTML=["Call me","On a call","Look at the market","Will do","👍 OK"]
+    .map(p=>`<button class="nq-btn" onclick='sendNote(${JSON.stringify(p)})'>${esc(p)}</button>`).join("");
+}
+async function loadNotes(scroll){
+  const th=document.getElementById("notes-thread");
+  try{
+    const d=await(await fetch("/api/notes")).json();
+    _notesList=(d&&d.notes)||[]; renderNotes(scroll);
+  }catch(e){ th.innerHTML=`<div class="msg-empty">Couldn't load notes.</div>`; }
+}
+function renderNotes(scroll){
+  const th=document.getElementById("notes-thread"), me=_meName();
+  if(!_notesList.length){ th.innerHTML=`<div class="msg-empty">No notes yet. Write one below — ${esc(_otherName())} gets a pop-up right away.</div>`; return; }
+  th.innerHTML=_notesList.map(n=>{
+    const mine=(n.by||"")===me, status=mine?(n.seen?"✓ Seen":"Sent"):"";
+    return `<div class="note ${mine?'me':'them'}"><div class="n-by">${esc((n.by||'?').toUpperCase())}</div>`
+      +`<div class="n-text">${esc(n.text||'')}</div>`
+      +`<div class="n-meta">${esc(n.age||'')}${status?' · '+status:''}</div></div>`;
+  }).join("");
+  if(scroll) th.scrollTop=th.scrollHeight;
+}
+async function sendNote(preset){
+  const inp=document.getElementById("note-input");
+  const text=((preset!==undefined?preset:inp.value)||"").trim();
+  if(!text) return;
+  if(preset===undefined && inp) inp.value="";
+  const me=_meName();
+  _notesList.push({by:me,text,at:new Date().toISOString(),seen:false,age:"now"}); renderNotes(true);  // optimistic
+  try{ await fetch("/api/note",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,by:me})}); }catch(e){}
+  loadNotes(true);
+}
+async function markNotesSeen(){
+  const me=_meName(); if(me==="me") return;
+  try{ await fetch("/api/notes/seen",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({by:me})}); }catch(e){}
+}
+function _playDing(){
+  try{ const AC=window.AudioContext||window.webkitAudioContext; if(!AC)return;
+    const ac=new AC(); const o=ac.createOscillator(), g=ac.createGain();
+    o.type="sine"; o.frequency.setValueAtTime(880,ac.currentTime); o.frequency.setValueAtTime(1175,ac.currentTime+0.12);
+    o.connect(g); g.connect(ac.destination);
+    g.gain.setValueAtTime(0.0001,ac.currentTime); g.gain.exponentialRampToValueAtTime(0.3,ac.currentTime+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,ac.currentTime+0.5); o.start(); o.stop(ac.currentTime+0.52);
+  }catch(e){}
+}
+function hideNoteToast(){ const t=document.getElementById("note-toast"); if(t)t.classList.remove("show"); }
+function showNoteToast(by, text){
+  let t=document.getElementById("note-toast");
+  if(!t){ t=document.createElement("div"); t.id="note-toast";
+    document.body.appendChild(t); _makeToastDraggable(t, ()=>{ hideNoteToast(); showNotes(); }); }
+  t.innerHTML=`<div class="st-hd">${esc((by||"Someone").toUpperCase())} LEFT YOU A NOTE</div>`
+    +(text?`<div class="st-title">${esc(text)}</div>`:"");
+  requestAnimationFrame(()=>t.classList.add("show"));
+  _playDing();
+  try{ if("Notification" in window && Notification.permission==="granted" && document.hidden){
+    const n=new Notification("K Terminal — Note",{body:(by?by+": ":"")+(text||"")});
+    n.onclick=()=>{ try{window.focus();}catch(e){} showNotes(); n.close(); }; } }catch(e){}
+}
+function updateNotesBadge(notes){
+  const me=_meName(), badge=document.getElementById("notes-badge"); if(!badge)return;
+  const viewing=document.getElementById("notesview").classList.contains("active");
+  const unread=(notes||[]).filter(n=>(n.by||"")!==me && !n.seen).length;
+  if(unread>0 && !viewing){ badge.textContent=unread; badge.classList.add("on"); }
+  else badge.classList.remove("on");
+}
+async function pollNotes(){
+  const other=window.SHARE_TO; if(!other||other==="team") return;
+  try{
+    const d=await(await fetch("/api/notes")).json();
+    const notes=(d&&d.notes)||[];
+    const key=n=>(n.by||"")+"|"+(n.at||"");
+    if(_notesSeen===null){ _notesSeen=new Set(notes.map(key)); updateNotesBadge(notes); return; }   // baseline
+    const fresh=notes.filter(n=>!_notesSeen.has(key(n))); fresh.forEach(n=>_notesSeen.add(key(n)));
+    const fromOther=fresh.filter(n=>(n.by||"")===other);
+    const viewing=document.getElementById("notesview").classList.contains("active");
+    if(fromOther.length){
+      if(viewing){ loadNotes(true); markNotesSeen(); _playDing(); }
+      else { const n=fromOther[fromOther.length-1]; showNoteToast(n.by, n.text); }
+    }
+    updateNotesBadge(notes);
+  }catch(e){}
+}
+function startNotesNotify(){ clearInterval(_notesTimer); pollNotes(); _notesTimer=setInterval(pollNotes, 20000); }
+startNotesNotify();
 
 /* ---- Daily Brief: Gemini reads monitor + news + research ---- */
 let dailyLoaded=false;

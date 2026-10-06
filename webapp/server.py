@@ -707,6 +707,106 @@ async def api_shared(request):
     for it in items:
         it["age"] = td._rss_age(it.get("at", ""))
     return web.json_response({"items": items})
+
+
+# ---- NOTES board: a dead-simple shared note thread between the two of us -------
+# Same cloud-backed model as Share: the desktop relays to the Fly backend so both
+# people's notes land in one list; each note is {by, text, at, seen}.
+NOTES_FILE = RESEARCH_DIR / ".notes.json"
+
+
+async def api_note(request):
+    """Leave a note. Desktop relays to the cloud board so the other person receives it."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = (body.get("text") or "").strip()[:800]
+    if not text:
+        return web.json_response({"error": "empty note"}, status=400)
+    by = ((body.get("by") or request.cookies.get("kkt_name") or "someone").strip()[:40]) or "someone"
+    cfg = _mirror_cfg()
+    if cfg:                                   # desktop -> relay to the cloud board
+        url, key = cfg
+        s = request.app["session"]
+        try:
+            await s.get(f"{url}/api/notes", params={"k": key}, timeout=aiohttp.ClientTimeout(total=15))
+            async with s.post(f"{url}/api/note", json={**body, "by": by},
+                              timeout=aiohttp.ClientTimeout(total=20)) as r:
+                return web.json_response(await r.json(content_type=None), status=r.status)
+        except Exception as e:
+            return web.json_response({"error": str(e)[:200]}, status=502)
+    note = {"by": by, "text": text, "at": datetime.now(timezone.utc).isoformat(), "seen": False}
+    try:
+        RESEARCH_DIR.mkdir(exist_ok=True)
+        try:
+            d = json.loads(NOTES_FILE.read_text())
+        except Exception:
+            d = {}
+        notes = d.get("notes") or []
+        notes.append(note)
+        d["notes"] = notes[-60:]
+        NOTES_FILE.write_text(json.dumps(d))
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True})
+
+
+async def api_notes(request):
+    """The shared note thread (oldest->newest)."""
+    cfg = _mirror_cfg()
+    if cfg:                                   # desktop -> read the cloud board
+        url, key = cfg
+        try:
+            async with request.app["session"].get(f"{url}/api/notes", params={"k": key},
+                                                   timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 200:
+                    data = await r.json(content_type=None)
+                    if isinstance(data, dict):
+                        return web.json_response(data)
+        except Exception:
+            pass
+        return web.json_response({"notes": []})
+    try:
+        d = json.loads(NOTES_FILE.read_text())
+    except Exception:
+        d = {"notes": []}
+    notes = d.get("notes", [])
+    for n in notes:
+        n["age"] = td._rss_age(n.get("at", ""))
+    return web.json_response({"notes": notes})
+
+
+async def api_notes_seen(request):
+    """Mark the OTHER person's notes as seen (the viewer acknowledges them)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    by = (body.get("by") or request.cookies.get("kkt_name") or "").strip()[:40]
+    cfg = _mirror_cfg()
+    if cfg:
+        url, key = cfg
+        s = request.app["session"]
+        try:
+            await s.get(f"{url}/api/notes", params={"k": key}, timeout=aiohttp.ClientTimeout(total=15))
+            async with s.post(f"{url}/api/notes/seen", json={"by": by},
+                              timeout=aiohttp.ClientTimeout(total=15)) as r:
+                return web.json_response(await r.json(content_type=None), status=r.status)
+        except Exception as e:
+            return web.json_response({"error": str(e)[:200]}, status=502)
+    try:
+        d = json.loads(NOTES_FILE.read_text())
+        changed = False
+        for n in d.get("notes", []):
+            if by and n.get("by") != by and not n.get("seen"):
+                n["seen"] = True
+                changed = True
+        if changed:
+            NOTES_FILE.write_text(json.dumps(d))
+    except Exception:
+        pass
+    return web.json_response({"ok": True})
 _RESEARCH_EXT = {".pdf", ".txt", ".md"}
 
 # Public research feeds shown alongside the folder. `readable`=True means the post's
@@ -2680,6 +2780,9 @@ def make_app():
     app.router.add_get("/api/topbond", api_topbond)
     app.router.add_post("/api/share", api_share)
     app.router.add_get("/api/shared", api_shared)
+    app.router.add_post("/api/note", api_note)
+    app.router.add_get("/api/notes", api_notes)
+    app.router.add_post("/api/notes/seen", api_notes_seen)
     app.router.add_get("/api/daily_brief", api_daily_brief)
     app.router.add_get("/api/last_seen", api_last_seen)
     app.router.add_post("/api/set_gemini", api_set_gemini)
