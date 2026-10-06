@@ -2277,6 +2277,7 @@ async function openResearch(i){
     let host=""; try{ host=new URL(it.link).hostname.replace(/^www\./,""); }catch(e){}
     body.innerHTML=`<pre class="rd-pre">${esc((it.body||"").trim())}</pre>`
       +(it.link?`<p class="dim">Official release: ${esc(host||"external site")} — tap “Open original ↗” above.</p>`:"");
+    if(it.autosum) doSummarize();   // Treasury auctions: auto-summarize the auction on open
   } else {   // web article — fetch full text
     ext.href=it.link||"#"; ext.style.display="";
     let a; try{ a=await(await fetch(`/api/article?url=${encodeURIComponent(it.link)}`)).json(); }catch(e){ a=null; }

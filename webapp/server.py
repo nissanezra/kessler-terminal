@@ -1096,7 +1096,7 @@ async def _treasury_auctions_section(session):
             _td_kv("Reopening", x.get("reopening")),
             _td_kv("TIPS", x.get("tips") if x.get("tips") == "Yes" else None)]))
         items.append({"title": title, "author": "Upcoming", "kind": "blurb", "body": body,
-                      "meta": dt.strftime("%b %d") if dt else "",
+                      "meta": dt.strftime("%b %d") if dt else "", "autosum": True,
                       "link": "https://www.treasurydirect.gov/auctions/upcoming/"})
 
     for x in sorted(res or [], key=lambda z: z.get("auctionDate", ""), reverse=True)[:6]:
@@ -1140,7 +1140,7 @@ async def _treasury_auctions_section(session):
             _td_kv("Indirect bidders", _td_bil(x.get("indirectBidderAccepted"))),
             _td_kv("Noncompetitive", _td_bil(x.get("noncompetitiveAccepted")))] if ln is not None)
         items.append({"title": title, "author": "Result", "kind": "blurb", "body": body,
-                      "meta": dt.strftime("%b %d") if dt else "",
+                      "meta": dt.strftime("%b %d") if dt else "", "autosum": True,
                       "link": "https://www.treasurydirect.gov/auctions/auction-query/"})
 
     if not items:
