@@ -2196,9 +2196,15 @@ async function markNotesSeen(){
   const me=_meName(); if(me==="me") return;
   try{ await fetch("/api/notes/seen",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({by:me})}); }catch(e){}
 }
+let _audioCtx=null;
+function _unlockAudio(){ try{ const AC=window.AudioContext||window.webkitAudioContext;
+  if(AC){ if(!_audioCtx)_audioCtx=new AC(); if(_audioCtx.state==="suspended")_audioCtx.resume(); } }catch(e){} }
+document.addEventListener("pointerdown",_unlockAudio);   // every interaction keeps audio unlocked
+document.addEventListener("keydown",_unlockAudio);
 function _playDing(){
   try{ const AC=window.AudioContext||window.webkitAudioContext; if(!AC)return;
-    const ac=new AC(); const o=ac.createOscillator(), g=ac.createGain();
+    if(!_audioCtx)_audioCtx=new AC(); if(_audioCtx.state==="suspended")_audioCtx.resume();
+    const ac=_audioCtx; const o=ac.createOscillator(), g=ac.createGain();
     o.type="sine"; o.frequency.setValueAtTime(880,ac.currentTime); o.frequency.setValueAtTime(1175,ac.currentTime+0.12);
     o.connect(g); g.connect(ac.destination);
     g.gain.setValueAtTime(0.0001,ac.currentTime); g.gain.exponentialRampToValueAtTime(0.3,ac.currentTime+0.02);
