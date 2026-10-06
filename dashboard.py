@@ -93,6 +93,7 @@ SECTIONS = [
     ]),
     (1, "VOLATILITY", "cnbc", [
         ("VIX", ".VIX", 2),
+        ("MOVE (BONDS)", ".MOVE", 2),
     ]),
 
     # ----- COLUMN 2 -----
