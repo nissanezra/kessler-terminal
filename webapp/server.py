@@ -302,6 +302,22 @@ async def _econ_fetch(session):
 
 
 async def api_econ(request):
+    """Today's economic releases. Desktops (mirror configured) pull the list from the shared
+    cloud app so only ONE IP ever hits the rate-limited ForexFactory feed and every surface
+    shows the same complete list (incl. FOMC Minutes). The cloud app computes it itself."""
+    cfg = _mirror_cfg()
+    if cfg:                                   # desktop -> read from the cloud app
+        url, key = cfg
+        try:
+            async with request.app["session"].get(f"{url}/api/econ", params={"k": key},
+                                                   timeout=aiohttp.ClientTimeout(total=15)) as r:
+                if r.status == 200:
+                    data = await r.json(content_type=None)
+                    if isinstance(data, dict) and data.get("rows"):
+                        return web.json_response(data)
+        except Exception:
+            pass
+        # relay unreachable -> fall through to a direct fetch (best effort)
     return web.json_response({"rows": await _econ_fetch(request.app["session"])})
 
 
