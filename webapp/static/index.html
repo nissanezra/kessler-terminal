@@ -133,6 +133,15 @@
   .time{color:var(--dim);text-align:right;}
   .flash-up{background:var(--green);color:#000!important;}
   .flash-down{background:var(--red);color:#fff!important;}
+  /* ---- today's economic releases ---- */
+  .econ-row{display:grid;grid-template-columns:46px 1fr auto auto;gap:7px;padding:0 6px;white-space:nowrap;line-height:1.5;align-items:baseline;}
+  .econ-row.e-pending{opacity:.55;}
+  .econ-row .e-time{color:var(--dim);}
+  .econ-row .e-name{color:var(--yellow);overflow:hidden;text-overflow:ellipsis;}
+  .econ-row .e-act{text-align:right;font-weight:700;}
+  .econ-row .e-act.e-up{color:var(--green);} .econ-row .e-act.e-down{color:var(--red);}
+  .econ-row .e-act.e-neu{color:var(--white);} .econ-row .e-act.e-due{color:#6f6f6f;font-weight:400;}
+  .econ-row .e-cons{color:var(--dim);text-align:right;font-size:11px;}
   /* ---- shared chart ---- */
   .chart-top{display:flex;align-items:center;gap:14px;margin-bottom:4px;flex-wrap:wrap;}
   .btn{color:var(--amber);background:#1a1a1a;border:none;padding:3px 9px;cursor:pointer;font-family:var(--mono);font-size:13px;}
@@ -912,7 +921,39 @@ function renderMonitor(data){
     if(k in lastRaw&&!isNaN(raw)&&raw!==lastRaw[k]){const cl=raw>lastRaw[k]?"flash-up":"flash-down";
       el.classList.add(cl);setTimeout(()=>el.classList.remove(cl),600);}
     if(!isNaN(raw))lastRaw[k]=raw;});
+  renderEcon();   // append TODAY'S ECONOMIC RELEASES into the rightmost column
 }
+/* ---- TODAY'S ECONOMIC RELEASES (rightmost column, under CREDIT STRESS) ---- */
+let _econData=null;
+async function fetchEcon(){
+  try{ const d=await(await fetch("/api/econ")).json(); _econData=d.rows||[]; }catch(e){}
+  renderEcon();
+}
+function renderEcon(){
+  if(!_econData)return;
+  const mon=document.getElementById("monitor");
+  if(!mon.children.length)return;
+  const col=mon.children[mon.children.length-1];   // rightmost column div
+  const old=col.querySelector(".econ-sec"); if(old)old.remove();
+  let h=`<div class="section econ-sec"><div class="sec-hdr">TODAY'S ECONOMIC RELEASES</div>`;
+  if(!_econData.length){
+    h+=`<div class="econ-row"><span></span><span class="e-name e-due">No US releases today.</span><span></span><span></span></div>`;
+  }
+  _econData.forEach(e=>{
+    const arrow=e.state==="beat"?" ▲":e.state==="miss"?" ▼":"";
+    const ac=e.state==="beat"?"e-up":e.state==="miss"?"e-down":e.state==="due"?"e-due":"e-neu";
+    const pend=(e.state==="due"||e.state==="event");
+    h+=`<div class="econ-row${pend?" e-pending":""}">`
+      +`<span class="e-time">${esc(e.time)}</span>`
+      +`<span class="e-name">${esc(e.name)}</span>`
+      +`<span class="e-act ${ac}">${esc(e.actual)}${arrow}</span>`
+      +`<span class="e-cons">${esc(e.cons)}</span></div>`;
+  });
+  h+=`</div>`;
+  col.insertAdjacentHTML("beforeend",h);
+}
+fetchEcon();
+setInterval(fetchEcon,5*60*1000);   // actuals print through the day
 async function loadMonitor(){
   let data; try{data=await(await fetch("/api/monitor")).json();}catch(e){return;}
   renderMonitor(data);

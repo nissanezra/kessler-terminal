@@ -146,6 +146,88 @@ async def api_monitor(request):
     return web.json_response(build_monitor())
 
 
+# ---- TODAY'S ECONOMIC RELEASES (Nasdaq calendar, no key) --------------------
+# US events only, with consensus + actual; colored beat/miss. Times come back
+# already in US-Eastern for US events (Trade Balance 08:30, auctions 13:00).
+NASDAQ_ECON = "https://api.nasdaq.com/api/calendar/economicevents"
+_ECON_CACHE = {"t": 0.0, "rows": []}
+_ECON_UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+            "Accept": "application/json"}
+# releases where a LOWER print is the "good"/beat direction (flip the coloring)
+_ECON_INVERSE = ("jobless claims", "continuing claims", "initial claims", "unemployment rate")
+
+
+def _econ_num(s):
+    """Parse '+52K' / '-0.3%' / '$14.0B' / '224K' / '4.932%' -> float, else None."""
+    if not s:
+        return None
+    s = s.replace(" ", "").replace(",", "").replace("$", "").replace("%", "").strip()
+    if not s or s in ("-", "--"):
+        return None
+    mult = 1.0
+    if s[-1] in "KkMmBbTt":
+        mult = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}[s[-1].lower()]
+        s = s[:-1]
+    try:
+        return float(s) * mult
+    except ValueError:
+        return None
+
+
+def _econ_time(hhmm):
+    """'08:30' -> '8:30a', '13:00' -> '1:00p'."""
+    try:
+        h, m = hhmm.split(":")
+        h, m = int(h), int(m)
+        return f"{h % 12 or 12}:{m:02d}{'a' if h < 12 else 'p'}"
+    except Exception:
+        return (hhmm or "").strip()
+
+
+async def _econ_fetch(session):
+    import time as _time
+    if _ECON_CACHE["rows"] and _time.time() - _ECON_CACHE["t"] < 240:
+        return _ECON_CACHE["rows"]
+    day = datetime.now().strftime("%Y-%m-%d")      # ET during US hours (UTC date only diverges late night)
+    try:
+        async with session.get(NASDAQ_ECON, params={"date": day}, headers=_ECON_UA,
+                               timeout=aiohttp.ClientTimeout(total=15)) as r:
+            data = await r.json(content_type=None)
+    except Exception:
+        return _ECON_CACHE["rows"]
+    raw = (data.get("data") or {}).get("rows") or []
+    rows = []
+    for x in raw:
+        if (x.get("country") or "").strip().lower() != "united states":
+            continue
+        name = (x.get("eventName") or "").strip()
+        if not name:
+            continue
+        actual = (x.get("actual") or "").replace("&nbsp;", "").replace(" ", " ").strip()
+        cons = (x.get("consensus") or "").replace("&nbsp;", "").replace(" ", " ").strip()
+        state = "neutral"
+        if not actual:
+            state = "due" if cons else "event"
+        elif cons:
+            a, c = _econ_num(actual), _econ_num(cons)
+            if a is not None and c is not None and a != c:
+                better = a > c
+                if any(k in name.lower() for k in _ECON_INVERSE):
+                    better = a < c
+                state = "beat" if better else "miss"
+        rows.append({"time": _econ_time((x.get("gmt") or "").strip()), "name": name,
+                     "actual": (actual or ("due" if cons else "")), "cons": ("e " + cons) if cons else "",
+                     "state": state})
+    _ECON_CACHE["rows"] = rows
+    _ECON_CACHE["t"] = _time.time()
+    return rows
+
+
+async def api_econ(request):
+    return web.json_response({"rows": await _econ_fetch(request.app["session"])})
+
+
 async def api_ws(request):
     """Live monitor stream: full snapshot on connect, then changed rows are pushed."""
     ws = web.WebSocketResponse(heartbeat=30)
@@ -2755,6 +2837,7 @@ def make_app():
     app.router.add_get("/app.webmanifest", app_manifest)
     app.router.add_get("/ws", api_ws)
     app.router.add_get("/api/monitor", api_monitor)
+    app.router.add_get("/api/econ", api_econ)
     app.router.add_get("/api/sections", api_sections)
     app.router.add_post("/api/add", api_add)
     app.router.add_get("/api/chart", api_chart)
