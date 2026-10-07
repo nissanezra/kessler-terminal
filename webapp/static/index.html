@@ -134,10 +134,13 @@
   .flash-up{background:var(--green);color:#000!important;}
   .flash-down{background:var(--red);color:#fff!important;}
   /* ---- today's economic releases ---- */
-  .econ-row{display:grid;grid-template-columns:46px 1fr auto auto;gap:7px;padding:0 6px;white-space:nowrap;line-height:1.5;align-items:baseline;}
-  .econ-row.e-pending{opacity:.55;}
+  .econ-row{display:grid;grid-template-columns:9px 42px 1fr auto auto;gap:6px;padding:0 6px;white-space:nowrap;line-height:1.5;align-items:baseline;}
+  .econ-row.e-pending{opacity:.5;}
+  .econ-row .e-dot{font-size:8px;line-height:1;}
+  .econ-row .e-dot.hi{color:#ff3b30;} .econ-row .e-dot.md{color:#ffaf00;} .econ-row .e-dot.lo{color:#4d4d4d;}
   .econ-row .e-time{color:var(--dim);}
-  .econ-row .e-name{color:var(--yellow);overflow:hidden;text-overflow:ellipsis;}
+  .econ-row .e-name{overflow:hidden;text-overflow:ellipsis;color:var(--yellow);}
+  .econ-row .e-name.hi{color:#fff;font-weight:700;} .econ-row .e-name.lo{color:#9c893a;}
   .econ-row .e-act{text-align:right;font-weight:700;}
   .econ-row .e-act.e-up{color:var(--green);} .econ-row .e-act.e-down{color:var(--red);}
   .econ-row .e-act.e-neu{color:var(--white);} .econ-row .e-act.e-due{color:#6f6f6f;font-weight:400;}
@@ -937,15 +940,18 @@ function renderEcon(){
   const old=col.querySelector(".econ-sec"); if(old)old.remove();
   let h=`<div class="section econ-sec"><div class="sec-hdr">TODAY'S ECONOMIC RELEASES</div>`;
   if(!_econData.length){
-    h+=`<div class="econ-row"><span></span><span class="e-name e-due">No US releases today.</span><span></span><span></span></div>`;
+    h+=`<div class="econ-row"><span></span><span></span><span class="e-name e-due">No US releases today.</span><span></span><span></span></div>`;
   }
   _econData.forEach(e=>{
     const arrow=e.state==="beat"?" ▲":e.state==="miss"?" ▼":"";
     const ac=e.state==="beat"?"e-up":e.state==="miss"?"e-down":e.state==="due"?"e-due":"e-neu";
-    const pend=(e.state==="due"||e.state==="event");
+    const imp=e.impact==="high"?"hi":e.impact==="medium"?"md":"lo";
+    // dim only LOW-importance pending rows; high/medium always stand out (e.g. FOMC Minutes)
+    const pend=(e.state==="due"||e.state==="event")&&imp==="lo";
     h+=`<div class="econ-row${pend?" e-pending":""}">`
+      +`<span class="e-dot ${imp}">●</span>`
       +`<span class="e-time">${esc(e.time)}</span>`
-      +`<span class="e-name">${esc(e.name)}</span>`
+      +`<span class="e-name ${imp}">${esc(e.name)}</span>`
       +`<span class="e-act ${ac}">${esc(e.actual)}${arrow}</span>`
       +`<span class="e-cons">${esc(e.cons)}</span></div>`;
   });

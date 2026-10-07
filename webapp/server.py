@@ -146,23 +146,34 @@ async def api_monitor(request):
     return web.json_response(build_monitor())
 
 
-# ---- TODAY'S ECONOMIC RELEASES (Nasdaq calendar, no key) --------------------
-# US events only, with consensus + actual; colored beat/miss. Times come back
-# already in US-Eastern for US events (Trade Balance 08:30, auctions 13:00).
+# ---- TODAY'S ECONOMIC RELEASES ---------------------------------------------
+# Source of truth = ForexFactory weekly calendar (faireconomy mirror, no key):
+# complete, correctly dated, and importance-rated (Low/Medium/High). It carries
+# forecast + previous but NOT released actuals, so we overlay Nasdaq's actuals
+# (matched by event name) to colour beat/miss once a print lands.
+# faireconomy hard-rate-limits (429), so its skeleton is cached ~30 min while
+# Nasdaq actuals (which change intraday) refresh every ~4 min and re-merge.
+FF_CAL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 NASDAQ_ECON = "https://api.nasdaq.com/api/calendar/economicevents"
-_ECON_CACHE = {"t": 0.0, "rows": []}
+_FF_CACHE = {"t": 0.0, "day": "", "ev": []}      # today's FF events (no actuals)
+_NAS_CACHE = {"t": 0.0, "map": []}               # [(tokenset, actual_str)]
 _ECON_UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
             "Accept": "application/json"}
-# releases where a LOWER print is the "good"/beat direction (flip the coloring)
-_ECON_INVERSE = ("jobless claims", "continuing claims", "initial claims", "unemployment rate")
+# releases where a LOWER print is the "good"/beat direction (flip the colouring)
+_ECON_INVERSE = ("jobless claims", "continuing claims", "initial claims",
+                 "unemployment rate", "unemployment claims")
+# noise words dropped before fuzzy-matching FF names to Nasdaq names
+_ECON_STOP = {"mom", "yoy", "qoq", "final", "prelim", "preliminary", "weekly",
+              "monthly", "change", "rate", "index", "the", "of", "and", "data",
+              "report", "us", "u", "s", "m", "y", "q"}
 
 
 def _econ_num(s):
     """Parse '+52K' / '-0.3%' / '$14.0B' / '224K' / '4.932%' -> float, else None."""
     if not s:
         return None
-    s = s.replace(" ", "").replace(",", "").replace("$", "").replace("%", "").strip()
+    s = s.replace(" ", "").replace(",", "").replace("$", "").replace("%", "").strip()
     if not s or s in ("-", "--"):
         return None
     mult = 1.0
@@ -175,52 +186,118 @@ def _econ_num(s):
         return None
 
 
-def _econ_time(hhmm):
-    """'08:30' -> '8:30a', '13:00' -> '1:00p'."""
+def _econ_tokens(name):
+    import re
+    toks = re.findall(r"[a-z0-9]+", (name or "").lower())
+    return {t for t in toks if t not in _ECON_STOP and len(t) > 1}
+
+
+def _econ_actual_for(name, nmap):
+    """Best-effort match of an FF event name to a Nasdaq (tokens, actual) pair."""
+    ft = _econ_tokens(name)
+    if not ft:
+        return None
+    best, bestj = None, 0.0
+    for ntoks, actual in nmap:
+        if not ntoks:
+            continue
+        inter = len(ft & ntoks)
+        if not inter:
+            continue
+        j = inter / len(ft | ntoks)
+        if ft <= ntoks or ntoks <= ft:
+            j = max(j, 0.8)
+        if j > bestj:
+            bestj, best = j, actual
+    return best if bestj >= 0.6 else None
+
+
+async def _econ_ff_events(session, today):
+    """Today's USD events from ForexFactory (cached ~30 min; survives 429)."""
+    import time as _time, re
+    if _FF_CACHE["ev"] and _FF_CACHE["day"] == today and _time.time() - _FF_CACHE["t"] < 1800:
+        return _FF_CACHE["ev"]
     try:
-        h, m = hhmm.split(":")
-        h, m = int(h), int(m)
-        return f"{h % 12 or 12}:{m:02d}{'a' if h < 12 else 'p'}"
+        async with session.get(FF_CAL, headers=_ECON_UA,
+                               timeout=aiohttp.ClientTimeout(total=20)) as r:
+            if r.status != 200:
+                return _FF_CACHE["ev"]
+            ff = await r.json(content_type=None)
     except Exception:
-        return (hhmm or "").strip()
+        return _FF_CACHE["ev"]
+    ev = []
+    for e in (ff if isinstance(ff, list) else []):
+        if e.get("country") != "USD":
+            continue
+        d = e.get("date") or ""
+        if d[:10] != today:
+            continue
+        name = (e.get("title") or "").strip()
+        if not name:
+            continue
+        mn, tm = 0, ""
+        m = re.search(r"T(\d\d):(\d\d)", d)
+        if m:
+            h, mi = int(m.group(1)), int(m.group(2))
+            mn = h * 60 + mi
+            tm = f"{h % 12 or 12}:{mi:02d}{'a' if h < 12 else 'p'}"
+        ev.append({"mn": mn, "time": tm, "name": name,
+                   "impact": (e.get("impact") or "").strip().lower(),
+                   "fc": (e.get("forecast") or "").strip()})
+    ev.sort(key=lambda x: x["mn"])
+    _FF_CACHE.update(t=_time.time(), day=today, ev=ev)
+    return ev
+
+
+async def _econ_nasdaq_map(session, today):
+    """Nasdaq actuals for today +/- 1 day (absorbs Nasdaq's date drift), cached ~4 min."""
+    import time as _time
+    if _NAS_CACHE["map"] and _time.time() - _NAS_CACHE["t"] < 240:
+        return _NAS_CACHE["map"]
+    nmap = []
+    for off in (0, -1, 1):
+        d = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=off)).strftime("%Y-%m-%d")
+        try:
+            async with session.get(NASDAQ_ECON, params={"date": d}, headers=_ECON_UA,
+                                   timeout=aiohttp.ClientTimeout(total=12)) as r:
+                if r.status != 200:
+                    continue
+                nd = await r.json(content_type=None)
+            for x in (nd.get("data") or {}).get("rows") or []:
+                if (x.get("country") or "").strip().lower() != "united states":
+                    continue
+                a = (x.get("actual") or "").replace("&nbsp;", "").replace("\xa0", " ").strip()
+                if a:
+                    nmap.append((_econ_tokens(x.get("eventName") or ""), a))
+        except Exception:
+            pass
+    if nmap:                         # keep the prior map if a fetch blipped
+        _NAS_CACHE.update(t=_time.time(), map=nmap)
+    return _NAS_CACHE["map"]
 
 
 async def _econ_fetch(session):
-    import time as _time
-    if _ECON_CACHE["rows"] and _time.time() - _ECON_CACHE["t"] < 240:
-        return _ECON_CACHE["rows"]
-    day = datetime.now().strftime("%Y-%m-%d")      # ET during US hours (UTC date only diverges late night)
-    try:
-        async with session.get(NASDAQ_ECON, params={"date": day}, headers=_ECON_UA,
-                               timeout=aiohttp.ClientTimeout(total=15)) as r:
-            data = await r.json(content_type=None)
-    except Exception:
-        return _ECON_CACHE["rows"]
-    raw = (data.get("data") or {}).get("rows") or []
+    today = _et_today()              # robust ET date (handles Fly's UTC clock)
+    ev = await _econ_ff_events(session, today)
+    nmap = await _econ_nasdaq_map(session, today)
     rows = []
-    for x in raw:
-        if (x.get("country") or "").strip().lower() != "united states":
-            continue
-        name = (x.get("eventName") or "").strip()
-        if not name:
-            continue
-        actual = (x.get("actual") or "").replace("&nbsp;", "").replace(" ", " ").strip()
-        cons = (x.get("consensus") or "").replace("&nbsp;", "").replace(" ", " ").strip()
+    for e in ev:
+        name, fc = e["name"], e["fc"]
+        actual = _econ_actual_for(name, nmap)
         state = "neutral"
-        if not actual:
-            state = "due" if cons else "event"
-        elif cons:
-            a, c = _econ_num(actual), _econ_num(cons)
-            if a is not None and c is not None and a != c:
-                better = a > c
-                if any(k in name.lower() for k in _ECON_INVERSE):
-                    better = a < c
-                state = "beat" if better else "miss"
-        rows.append({"time": _econ_time((x.get("gmt") or "").strip()), "name": name,
-                     "actual": (actual or ("due" if cons else "")), "cons": ("e " + cons) if cons else "",
-                     "state": state})
-    _ECON_CACHE["rows"] = rows
-    _ECON_CACHE["t"] = _time.time()
+        if actual:
+            if fc:
+                a, c = _econ_num(actual), _econ_num(fc)
+                if a is not None and c is not None and a != c:
+                    better = a > c
+                    if any(k in name.lower() for k in _ECON_INVERSE):
+                        better = a < c
+                    state = "beat" if better else "miss"
+        else:
+            state = "due" if fc else "event"
+        rows.append({"time": e["time"], "name": name, "impact": e["impact"],
+                     "actual": (actual or ("due" if fc else "")),
+                     "cons": ("e " + fc) if fc else "", "state": state})
     return rows
 
 
