@@ -157,6 +157,7 @@ FF_CAL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 NASDAQ_ECON = "https://api.nasdaq.com/api/calendar/economicevents"
 _FF_CACHE = {"t": 0.0, "day": "", "ev": []}      # today's FF events (no actuals)
 _NAS_CACHE = {"t": 0.0, "map": []}               # [(tokenset, actual_str)]
+_ECON_SEEN = {"day": "", "actuals": {}}          # sticky {ff_name: actual} caught today
 _ECON_UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
             "Accept": "application/json"}
@@ -280,10 +281,18 @@ async def _econ_fetch(session):
     today = _et_today()              # robust ET date (handles Fly's UTC clock)
     ev = await _econ_ff_events(session, today)
     nmap = await _econ_nasdaq_map(session, today)
+    if _ECON_SEEN["day"] != today:               # reset the sticky set on a new ET day
+        _ECON_SEEN["day"] = today
+        _ECON_SEEN["actuals"] = {}
+    seen = _ECON_SEEN["actuals"]
     rows = []
     for e in ev:
         name, fc = e["name"], e["fc"]
         actual = _econ_actual_for(name, nmap)
+        if actual:
+            seen[name] = actual                  # a real print -> remember it for the rest of the day
+        elif name in seen:
+            actual = seen[name]                  # Nasdaq blanked/re-dated it -> keep what we already caught
         state = "neutral"
         if actual:
             if fc:
