@@ -614,12 +614,43 @@ def _mail_ready():
     return mail is not None and mail.is_configured()
 
 
+async def _mail_relay(request, path, post=False):
+    """Desktop -> Fly relay for mail. The mailbox creds live ONLY on the Fly app, so a
+    desktop (mirror configured) forwards its mail calls there; the cloud app has no mirror
+    cfg and serves locally. Returns a response, or None on the cloud app / on failure."""
+    cfg = _mirror_cfg()
+    if not cfg:
+        return None
+    url, key = cfg
+    s = request.app["session"]
+    try:
+        if post:
+            body = await request.json()
+            await s.get(f"{url}/api/mail/status", params={"k": key},   # set the auth cookie first
+                        timeout=aiohttp.ClientTimeout(total=15))
+            async with s.post(f"{url}{path}", params={"k": key}, json=body,
+                              timeout=aiohttp.ClientTimeout(total=30)) as r:
+                return web.json_response(await r.json(content_type=None), status=r.status)
+        params = dict(request.query); params["k"] = key
+        async with s.get(f"{url}{path}", params=params,
+                         timeout=aiohttp.ClientTimeout(total=25)) as r:
+            return web.json_response(await r.json(content_type=None), status=r.status)
+    except Exception as e:
+        return web.json_response({"configured": False, "error": str(e)[:200]})
+
+
 async def api_mail_status(request):
+    relay = await _mail_relay(request, "/api/mail/status")
+    if relay is not None:
+        return relay
     return web.json_response({"configured": _mail_ready(),
                               "email": mail.account_email() if _mail_ready() else None})
 
 
 async def api_mail_messages(request):
+    relay = await _mail_relay(request, "/api/mail/messages")
+    if relay is not None:
+        return relay
     if not _mail_ready():
         return web.json_response({"configured": False, "messages": []})
     folder = request.query.get("folder", "inbox")
@@ -636,6 +667,9 @@ async def api_mail_messages(request):
 
 
 async def api_mail_message(request):
+    relay = await _mail_relay(request, "/api/mail/message")
+    if relay is not None:
+        return relay
     if not _mail_ready():
         return web.json_response({"configured": False}, status=404)
     mid = request.query.get("id")
@@ -649,6 +683,9 @@ async def api_mail_message(request):
 
 
 async def api_mail_send(request):
+    relay = await _mail_relay(request, "/api/mail/send", post=True)
+    if relay is not None:
+        return relay
     if not _mail_ready():
         return web.json_response({"configured": False, "error": "mailbox not linked"}, status=404)
     try:

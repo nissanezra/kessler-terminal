@@ -41,6 +41,11 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = "offline_access Mail.Read Mail.Send User.Read"
 UA = {"User-Agent": "KesslerTerminal/1.0"}
 
+# App-only (client-credentials) access token cache. When a client secret + target
+# mailbox are configured the module runs app-only: the app authenticates as itself
+# (no user sign-in, no MFA) and reads/sends that one mailbox via /users/{mailbox}.
+_APP_TOKEN = {"token": "", "exp": 0.0}
+
 
 # ---------------------------------------------------------------------------
 # Credentials + token storage
@@ -60,6 +65,39 @@ def load_creds():
 
 def have_creds():
     return all(load_creds())
+
+
+def _cred_line(idx):
+    """Nth credential line from the dotfile (0-based), '' if absent."""
+    if CRED_FILE.exists():
+        lines = [ln.strip() for ln in CRED_FILE.read_text().splitlines() if ln.strip()]
+        if len(lines) > idx:
+            return lines[idx]
+    return ""
+
+
+def _app_secret():
+    """Client secret for app-only mode (env or line 3 of the dotfile)."""
+    return os.environ.get("MAIL_CLIENT_SECRET", "").strip() or _cred_line(2)
+
+
+def _mailbox():
+    """Target mailbox for app-only mode, e.g. rkessler@kesslercompanies.com (env or line 4)."""
+    return os.environ.get("MAIL_MAILBOX", "").strip() or _cred_line(3)
+
+
+def app_only():
+    """True when client id + tenant + secret + mailbox are all set -> app-only (no MFA)."""
+    cid, tid = load_creds()
+    return bool(cid and tid and _app_secret() and _mailbox())
+
+
+def _base():
+    """Graph path root: /me for delegated, /users/<mailbox> for app-only."""
+    if app_only():
+        from urllib.parse import quote
+        return "/users/" + quote(_mailbox())
+    return "/me"
 
 
 def _load_token():
@@ -84,12 +122,14 @@ def _save_token(tok, keep_email=True):
 
 
 def is_configured():
-    """True when we have creds AND a saved token, so the app can offer the panel."""
-    return have_creds() and _load_token() is not None
+    """True when the panel can go live: app-only creds present, OR delegated creds + a token."""
+    return app_only() or (have_creds() and _load_token() is not None)
 
 
 def account_email():
-    """The signed-in mailbox address, if known (cached at login)."""
+    """The mailbox address shown in the panel."""
+    if app_only():
+        return _mailbox()
     return (_load_token() or {}).get("email")
 
 
@@ -139,7 +179,28 @@ async def poll_device_code(session, device_code, interval=5, expires_in=900):
     raise RuntimeError("device login timed out")
 
 
+async def _app_access_token(session):
+    """Client-credentials token for app-only mode (cached until it nears expiry)."""
+    now = time.time()
+    if _APP_TOKEN["token"] and now < _APP_TOKEN["exp"]:
+        return _APP_TOKEN["token"]
+    cid, _ = load_creds()
+    data = {"grant_type": "client_credentials", "client_id": cid,
+            "client_secret": _app_secret(),
+            "scope": "https://graph.microsoft.com/.default"}
+    async with session.post(_token_endpoint(), data=data, headers=UA,
+                            timeout=aiohttp.ClientTimeout(total=20)) as r:
+        body = await r.json(content_type=None)
+        if r.status != 200:
+            raise RuntimeError(f"app token {r.status}: {str(body)[:200]}")
+    _APP_TOKEN["token"] = body["access_token"]
+    _APP_TOKEN["exp"] = now + int(body.get("expires_in", 3600)) - 120
+    return _APP_TOKEN["token"]
+
+
 async def _valid_access_token(session):
+    if app_only():
+        return await _app_access_token(session)
     tok = _load_token()
     if not tok:
         raise RuntimeError("not signed in — run `python mail_graph.py login`")
@@ -172,6 +233,8 @@ async def _get(session, path, params=None):
 
 
 async def _cache_email(session):
+    if app_only():
+        return _mailbox()
     try:
         me = await _get(session, "/me", {"$select": "mail,userPrincipalName,displayName"})
         email = me.get("mail") or me.get("userPrincipalName")
@@ -194,7 +257,7 @@ async def list_messages(session, folder="inbox", top=25):
     """Latest message headers from a well-known folder (inbox / sentitems / drafts)."""
     params = {"$top": str(top), "$orderby": "receivedDateTime desc",
               "$select": "subject,from,receivedDateTime,isRead,bodyPreview,hasAttachments"}
-    data = await _get(session, f"/me/mailFolders/{folder}/messages", params)
+    data = await _get(session, f"{_base()}/mailFolders/{folder}/messages", params)
     out = []
     for m in data.get("value", []):
         out.append({
@@ -212,7 +275,7 @@ async def list_messages(session, folder="inbox", top=25):
 async def get_message(session, msg_id):
     """One full message: recipients + HTML/text body."""
     params = {"$select": "subject,from,toRecipients,ccRecipients,receivedDateTime,body"}
-    m = await _get(session, f"/me/messages/{msg_id}", params)
+    m = await _get(session, f"{_base()}/messages/{msg_id}", params)
     body = m.get("body", {})
     return {
         "id": m.get("id"),
@@ -241,7 +304,7 @@ async def send_message(session, to, subject, text, cc=None):
     token = await _valid_access_token(session)
     headers = {"Authorization": f"Bearer {token}",
                "Content-Type": "application/json", **UA}
-    async with session.post(f"{GRAPH}/me/sendMail", json=payload, headers=headers,
+    async with session.post(f"{GRAPH}{_base()}/sendMail", json=payload, headers=headers,
                             timeout=aiohttp.ClientTimeout(total=25)) as r:
         if r.status not in (200, 202):
             raise RuntimeError(f"sendMail {r.status}: {(await r.text())[:200]}")
@@ -256,6 +319,22 @@ async def _cli():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "help"
     async with aiohttp.ClientSession() as s:
         if cmd == "login":
+            if app_only():
+                print("App-only mode is configured (client secret + mailbox) — no sign-in needed.")
+                print("Target mailbox:", _mailbox())
+                print("Verifying access…")
+                try:
+                    msgs = await list_messages(s, top=3)
+                    print(f"✓ connected — {len(msgs)} recent message(s) readable.")
+                    for m in msgs:
+                        frm = (m["from"]["name"] or m["from"]["email"] or "?")[:28]
+                        print(f"   {m['received'][:16]}  {frm:28}  {m['subject'][:46]}")
+                except Exception as e:
+                    print("✗ could not read the mailbox:", e)
+                    print("  If this says 'Access denied'/insufficient privileges, IT must grant")
+                    print("  APPLICATION permissions Mail.Read + Mail.Send (not delegated) and")
+                    print("  admin-consent them for this app.")
+                return
             if not have_creds():
                 print("Missing client/tenant id. Put them in", CRED_FILE,
                       "(line 1 = client id, line 2 = tenant id) or set "
