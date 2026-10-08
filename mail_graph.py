@@ -50,40 +50,75 @@ _APP_TOKEN = {"token": "", "exp": 0.0}
 # ---------------------------------------------------------------------------
 # Credentials + token storage
 # ---------------------------------------------------------------------------
+# The client SECRET never lives in a file — it is stored in the OS keychain
+# (macOS Keychain / Windows Credential Manager) under this service/account.
+KEYRING_SERVICE = "KesslerTerminal"
+KEYRING_ACCOUNT = "mail_client_secret"
+
+
+def _cfg():
+    """Non-secret config (client id, tenant, mailbox) from .mail_graph_creds.
+    Preferred form is key=value lines; legacy positional lines are still read."""
+    d = {}
+    if not CRED_FILE.exists():
+        return d
+    lines = [ln.strip() for ln in CRED_FILE.read_text().splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    if any("=" in ln for ln in lines):
+        for ln in lines:
+            if "=" in ln:
+                k, v = ln.split("=", 1)
+                d[k.strip().lower()] = v.strip()
+    else:                                     # legacy: client id / tenant / secret / mailbox
+        for key, val in zip(("client_id", "tenant", "secret", "mailbox"), lines):
+            d[key] = val
+    return d
+
+
 def load_creds():
-    """(client_id, tenant_id) from env or the local dotfile, else (None, None)."""
-    cid = os.environ.get("MAIL_CLIENT_ID", "").strip()
-    tid = os.environ.get("MAIL_TENANT_ID", "").strip()
-    if cid and tid:
-        return cid, tid
-    if CRED_FILE.exists():
-        lines = [ln.strip() for ln in CRED_FILE.read_text().splitlines() if ln.strip()]
-        if len(lines) >= 2:
-            return lines[0], lines[1]
-    return None, None
+    """(client_id, tenant_id) from env or the config file, else (None, None)."""
+    c = _cfg()
+    cid = os.environ.get("MAIL_CLIENT_ID", "").strip() or c.get("client_id", "")
+    tid = os.environ.get("MAIL_TENANT_ID", "").strip() or c.get("tenant", "")
+    return (cid or None, tid or None)
 
 
 def have_creds():
     return all(load_creds())
 
 
-def _cred_line(idx):
-    """Nth credential line from the dotfile (0-based), '' if absent."""
-    if CRED_FILE.exists():
-        lines = [ln.strip() for ln in CRED_FILE.read_text().splitlines() if ln.strip()]
-        if len(lines) > idx:
-            return lines[idx]
-    return ""
+def keyring_set_secret(secret):
+    """Store the client secret in the OS keychain."""
+    import keyring
+    keyring.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, secret)
+
+
+def keyring_clear_secret():
+    try:
+        import keyring
+        keyring.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+    except Exception:
+        pass
 
 
 def _app_secret():
-    """Client secret for app-only mode (env or line 3 of the dotfile)."""
-    return os.environ.get("MAIL_CLIENT_SECRET", "").strip() or _cred_line(2)
+    """Client secret for app-only mode: env override -> OS keychain -> config file (fallback)."""
+    env = os.environ.get("MAIL_CLIENT_SECRET", "").strip()
+    if env:
+        return env
+    try:
+        import keyring
+        kv = (keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT) or "").strip()
+        if kv:
+            return kv
+    except Exception:
+        pass
+    return _cfg().get("secret", "")
 
 
 def _mailbox():
-    """Target mailbox for app-only mode, e.g. rkessler@kesslercompanies.com (env or line 4)."""
-    return os.environ.get("MAIL_MAILBOX", "").strip() or _cred_line(3)
+    """Target mailbox for app-only mode, e.g. rkessler@kesslercompanies.com."""
+    return os.environ.get("MAIL_MAILBOX", "").strip() or _cfg().get("mailbox", "")
 
 
 def app_only():
@@ -318,6 +353,41 @@ async def _cli():
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "help"
     async with aiohttp.ClientSession() as s:
+        if cmd == "set-config":
+            cid = input("Client (app) ID  [the GUID, e.g. 1234abcd-...]: ").strip()
+            tid = (input("Tenant [kesslercompanies.com]: ").strip()
+                   or "kesslercompanies.com")
+            mbx = (input("Mailbox [rkessler@kesslercompanies.com]: ").strip()
+                   or "rkessler@kesslercompanies.com")
+            if "~" in cid or "@" in cid:
+                print("\n⚠ That doesn't look like a client ID — it should be a GUID "
+                      "(no '~', no '@'). The '~' string is the client SECRET; set that "
+                      "with `set-secret`, not here. Aborting.")
+                return
+            CRED_FILE.write_text(f"client_id={cid}\ntenant={tid}\nmailbox={mbx}\n")
+            try:
+                os.chmod(CRED_FILE, 0o600)
+            except Exception:
+                pass
+            print("✓ wrote config to", CRED_FILE, "(no secret in here)")
+            return
+        if cmd == "set-secret":
+            import getpass
+            sec = getpass.getpass("Paste the client SECRET VALUE (hidden input): ").strip()
+            if not sec:
+                print("nothing entered — aborted.")
+                return
+            try:
+                keyring_set_secret(sec)
+                print("✓ secret stored in the OS keychain (service", KEYRING_SERVICE + ")")
+            except Exception as e:
+                print("✗ keychain store failed:", e)
+                print("  Install the keychain support: pip install keyring pywin32-ctypes")
+            return
+        if cmd == "clear-secret":
+            keyring_clear_secret()
+            print("✓ secret removed from the OS keychain")
+            return
         if cmd == "login":
             if app_only():
                 print("App-only mode is configured (client secret + mailbox) — no sign-in needed.")

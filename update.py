@@ -155,6 +155,18 @@ def _ensure_deps():
                                timeout=180)
             except Exception as e:
                 print(f"  update: pywebview install skipped — {e}")
+        # MESSAGES panel (app-only Graph mail): the client secret is kept in Windows
+        # Credential Manager via keyring — never in a file. Only Robert's Windows needs it.
+        try:
+            import keyring  # noqa: F401
+        except Exception:
+            print("  update: installing secure credential store (keyring)…")
+            try:
+                import subprocess
+                subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                                "keyring", "pywin32-ctypes"], timeout=180)
+            except Exception as e:
+                print(f"  update: keyring install skipped — {e}")
 
 
 def _ensure_greeting():
