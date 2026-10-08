@@ -615,9 +615,11 @@ def _mail_ready():
 
 
 async def _mail_relay(request, path, post=False):
-    """Desktop -> Fly relay for mail. The mailbox creds live ONLY on the Fly app, so a
-    desktop (mirror configured) forwards its mail calls there; the cloud app has no mirror
-    cfg and serves locally. Returns a response, or None on the cloud app / on failure."""
+    """Mail is served LOCALLY wherever the mailbox is linked (the client secret lives on the
+    desktop, never on Fly). Only a desktop that has NO local mailbox falls back to relaying to
+    the cloud app. Returns a response, or None to serve locally."""
+    if _mail_ready():                      # local mailbox linked -> always serve locally
+        return None
     cfg = _mirror_cfg()
     if not cfg:
         return None
