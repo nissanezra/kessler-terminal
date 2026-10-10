@@ -494,6 +494,13 @@
   .msg-rd-meta b{color:var(--price);}
   .msg-rd-body{color:var(--price);font-size:14px;line-height:1.6;}
   .msg-rd-body p{margin:0 0 10px;} .msg-rd-body a{color:var(--yellow);}
+  .msg-atts{margin:8px 0 12px;padding:8px 10px;background:#141414;border:1px solid #333;border-radius:5px;
+    display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+  .msg-atts-lbl{color:var(--dim);font-size:12px;margin-right:4px;}
+  .msg-att{display:inline-flex;align-items:center;gap:6px;color:var(--yellow);background:#1e1e1e;
+    border:1px solid #3a3a3a;border-radius:4px;padding:4px 9px;font-size:12.5px;text-decoration:none;}
+  .msg-att:hover{background:var(--amber);color:#000;border-color:var(--amber);}
+  .msg-att-sz{color:var(--dim);font-size:11px;}  .msg-att:hover .msg-att-sz{color:#333;}
   .msg-rd-actions{margin-bottom:12px;display:flex;gap:8px;}
   .msg-form label{display:block;color:var(--yellow);font-size:12px;margin:10px 0 3px;}
   .msg-form input,.msg-form textarea{width:100%;background:#141414;border:1px solid #3a3a3a;
@@ -588,7 +595,7 @@
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn" onclick="showShared()">SHARED</button>
       <button class="navbtn" onclick="showNotes()">NOTES<span class="nb-badge" id="notes-badge"></span></button>
-      <button class="navbtn" onclick="showMessages()">MESSAGES</button>
+      <button class="navbtn" onclick="showMessages()">MESSAGES<span class="nb-badge" id="mail-badge"></span></button>
       <button class="navbtn navbtn-brief" onclick="showDaily()">✦ DAILY BRIEF</button>
     </div>
     <div class="tb-right">
@@ -1970,7 +1977,7 @@ async function saveGeminiKey(){
 
 /* ---------------- MESSAGES (Microsoft 365 mailbox: read + send) ---------------- */
 let msgState={folder:"inbox",loaded:false,acct:null,sel:null,list:[]};
-function showMessages(){ show("msgview"); renderMsgFolders(); if(!msgState.loaded) loadInbox(false); }
+function showMessages(){ show("msgview"); renderMsgFolders(); if(!msgState.loaded) loadInbox(false); updateMailBadge(); }
 function renderMsgFolders(){
   const f=document.getElementById("msg-folders");
   if(!window.MAIL_READY){ f.innerHTML=""; return; }
@@ -2046,22 +2053,76 @@ async function openMsg(id){
     const bodyHtml=(m.bodyType==="html")
       ? `<iframe class="msg-frame" sandbox="" srcdoc="${esc(m.body)}"></iframe>`
       : `<div class="msg-rd-body">${esc(m.body).replace(/\n/g,"<br>")}</div>`;
+    const atts=m.attachments||[];
+    const attHtml=atts.length?`<div class="msg-atts"><span class="msg-atts-lbl">&#128206; ${atts.length} attachment${atts.length>1?"s":""}:</span>`
+      +atts.map(a=>`<a class="msg-att" href="/api/mail/attachment?id=${encodeURIComponent(m.id)}&att=${encodeURIComponent(a.id)}" target="_blank" rel="noopener">${esc(a.name)}<span class="msg-att-sz">${fmtBytes(a.size)}</span></a>`).join("")
+      +`</div>`:"";
     pane.innerHTML=`
-      <div class="msg-rd-actions"><button class="btn" onclick="msgBackToList()">← Inbox</button><button class="btn" onclick="msgReply()">↩ Reply</button></div>
+      <div class="msg-rd-actions"><button class="btn" onclick="msgBackToList()">← Inbox</button><button class="btn" onclick="msgReply()">↩ Reply</button><button class="btn" onclick="msgForward()">↪ Forward</button></div>
       <div class="msg-rd-subj">${esc(m.subject)}</div>
       <div class="msg-rd-meta"><b>From:</b> ${addr(frm)}<br>
         <b>To:</b> ${(m.to||[]).map(addr).join(", ")||"—"}<br>
         <span>${new Date(m.received).toLocaleString()}</span></div>
+      ${attHtml}
       ${bodyHtml}`;
-    // remember the open message for Reply
-    msgState.open={from:frm.email||"",subject:m.subject||""};
+    // remember the open message for Reply / Forward
+    msgState.open={id:m.id, from:frm.email||"", subject:m.subject||""};
     const fr=pane.querySelector(".msg-frame"); if(fr){ fr.style.width="100%"; fr.style.minHeight="52vh"; fr.style.border="0"; fr.style.background="#fff"; fr.style.borderRadius="4px"; }
+    markMsgRead(m.id);                 // opening marks it read (Graph GET doesn't auto-mark)
   }catch(e){ pane.innerHTML=`<div class="msg-empty">Network error opening message.</div>`; }
 }
 function msgReply(){
   const o=msgState.open||{};
   const subj=(o.subject||"").replace(/^\s*re:\s*/i,"");
   msgCompose({to:o.from||"", subject:subj?("Re: "+subj):""});
+}
+function msgReopen(){ if(msgState.open&&msgState.open.id) openMsg(msgState.open.id); else msgBackToList(); }
+function msgForward(){
+  const o=msgState.open||{};
+  const pane=document.getElementById("msg-read"); msgShowRead();
+  pane.innerHTML=`
+    <div class="msg-rd-actions"><button class="btn" onclick="msgReopen()">← Back</button></div>
+    <div class="msg-rd-subj">Forward: ${esc(o.subject||"")}</div>
+    <div class="msg-form">
+      <label>To</label><input id="mf-to" placeholder="name@example.com, another@…">
+      <label>Note (optional)</label><textarea id="mf-body" placeholder="Add a note above the forwarded message…"></textarea>
+      <div class="msg-send-row">
+        <button class="btn navbtn-brief" onclick="msgForwardSend()">Forward ▶</button>
+        <button class="btn" onclick="msgReopen()">Cancel</button>
+        <span class="msg-note" id="mf-note">Forwards the original message and its attachments.</span>
+      </div>
+    </div>`;
+  const t=document.getElementById("mf-to"); if(t) t.focus();
+}
+async function msgForwardSend(){
+  const to=document.getElementById("mf-to").value.trim(), note=document.getElementById("mf-note");
+  if(!to){ note.textContent="Add a recipient."; note.style.color="var(--red)"; return; }
+  const o=msgState.open||{};
+  note.textContent="Forwarding…"; note.style.color="var(--dim)";
+  try{
+    const r=await fetch("/api/mail/forward",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({id:o.id, to, comment:document.getElementById("mf-body").value})});
+    const d=await r.json();
+    if(d.ok){ note.textContent="✓ Forwarded."; note.style.color="var(--green)"; setTimeout(()=>msgBackToList(),900); }
+    else{ note.textContent="Forward failed: "+(d.error||"unknown"); note.style.color="var(--red)"; }
+  }catch(e){ note.textContent="Network error forwarding."; note.style.color="var(--red)"; }
+}
+async function markMsgRead(id){
+  const m=msgState.list.find(x=>x.id===id);
+  if(m && !m.unread) return;                 // already read
+  try{ await fetch("/api/mail/read",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id,read:true})}); }catch(e){}
+  if(m){ m.unread=false; renderMsgList(); }
+  updateMailBadge();
+}
+function fmtBytes(n){ n=+n||0; if(n<1024)return n+" B"; if(n<1048576)return (n/1024).toFixed(0)+" KB"; return (n/1048576).toFixed(1)+" MB"; }
+async function updateMailBadge(){
+  const b=document.getElementById("mail-badge"); if(!b) return;
+  if(!window.MAIL_READY){ b.classList.remove("on"); return; }
+  let count=0;
+  try{ count=(await(await fetch("/api/mail/unread")).json()).count||0; }catch(e){ return; }
+  const viewing=document.getElementById("msgview").classList.contains("active");
+  if(count>0 && !viewing){ b.textContent=count>99?"99+":count; b.classList.add("on"); }
+  else b.classList.remove("on");
 }
 function msgCompose(pre){
   pre=pre||{};
@@ -2123,6 +2184,7 @@ function showMsgToast(from, subject){
 function hideMsgToast(){ const t=document.getElementById("msg-toast"); if(t)t.classList.remove("show"); }
 async function pollMail(){
   if(!window.MAIL_READY) return;
+  updateMailBadge();                        // keep the nav unread count fresh
   try{
     const d=await(await fetch("/api/mail/messages?folder=inbox&top=30")).json();
     if(!d.configured || !Array.isArray(d.messages)) return;

@@ -719,6 +719,77 @@ async def api_mail_send(request):
         return web.json_response({"ok": False, "error": str(e)[:200]}, status=502)
 
 
+async def api_mail_attachment(request):
+    # binary; served locally wherever the mailbox is linked (Robert's Windows)
+    if not _mail_ready():
+        return web.Response(status=404, text="mailbox not linked")
+    mid, aid = request.query.get("id"), request.query.get("att")
+    if not (mid and aid):
+        return web.Response(status=400, text="missing id/att")
+    try:
+        name, ctype, raw = await mail.get_attachment(request.app["session"], mid, aid)
+    except Exception as e:
+        return web.Response(status=502, text=str(e)[:200])
+    from urllib.parse import quote as _q
+    disp = "inline" if (ctype == "application/pdf" or ctype.startswith("image/")) else "attachment"
+    cd = f"{disp}; filename=\"{name}\"; filename*=UTF-8''{_q(name)}"
+    return web.Response(body=raw, headers={"Content-Type": ctype or "application/octet-stream",
+                                           "Content-Disposition": cd,
+                                           "Cache-Control": "private, max-age=600"})
+
+
+async def api_mail_forward(request):
+    relay = await _mail_relay(request, "/api/mail/forward", post=True)
+    if relay is not None:
+        return relay
+    if not _mail_ready():
+        return web.json_response({"configured": False, "error": "mailbox not linked"}, status=404)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad request"}, status=400)
+    mid, to = data.get("id"), data.get("to", "")
+    if not mid or not str(to).strip():
+        return web.json_response({"error": "missing id or recipient"}, status=400)
+    try:
+        await mail.forward_message(request.app["session"], mid, to, data.get("comment", ""))
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)[:200]}, status=502)
+
+
+async def api_mail_read(request):
+    relay = await _mail_relay(request, "/api/mail/read", post=True)
+    if relay is not None:
+        return relay
+    if not _mail_ready():
+        return web.json_response({"configured": False}, status=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not data.get("id"):
+        return web.json_response({"error": "missing id"}, status=400)
+    try:
+        await mail.mark_read(request.app["session"], data["id"], data.get("read", True))
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)[:200]}, status=502)
+
+
+async def api_mail_unread(request):
+    relay = await _mail_relay(request, "/api/mail/unread")
+    if relay is not None:
+        return relay
+    if not _mail_ready():
+        return web.json_response({"configured": False, "count": 0})
+    try:
+        return web.json_response({"configured": True,
+                                  "count": await mail.unread_count(request.app["session"])})
+    except Exception as e:
+        return web.json_response({"configured": True, "count": 0, "error": str(e)[:120]})
+
+
 # ---- symbol search: company name -> ticker suggestions -------------------
 # SEC's company_tickers.json covers ~10k US-listed stocks (name -> ticker). We
 # add the ETFs / indices / crypto the terminal supports but SEC doesn't list.
@@ -3004,6 +3075,10 @@ def make_app():
     app.router.add_get("/api/mail/messages", api_mail_messages)
     app.router.add_get("/api/mail/message", api_mail_message)
     app.router.add_post("/api/mail/send", api_mail_send)
+    app.router.add_get("/api/mail/attachment", api_mail_attachment)
+    app.router.add_post("/api/mail/forward", api_mail_forward)
+    app.router.add_post("/api/mail/read", api_mail_read)
+    app.router.add_get("/api/mail/unread", api_mail_unread)
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)
     app.router.add_get("/api/news_board", api_news_board)

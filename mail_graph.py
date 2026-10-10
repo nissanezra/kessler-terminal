@@ -308,10 +308,22 @@ async def list_messages(session, folder="inbox", top=25):
 
 
 async def get_message(session, msg_id):
-    """One full message: recipients + HTML/text body."""
-    params = {"$select": "subject,from,toRecipients,ccRecipients,receivedDateTime,body"}
+    """One full message: recipients + HTML/text body + file-attachment list (metadata only)."""
+    params = {"$select": "subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments"}
     m = await _get(session, f"{_base()}/messages/{msg_id}", params)
     body = m.get("body", {})
+    atts = []
+    if m.get("hasAttachments"):
+        try:
+            ad = await _get(session, f"{_base()}/messages/{msg_id}/attachments",
+                            {"$select": "id,name,contentType,size,isInline"})
+            for a in ad.get("value", []):
+                if a.get("isInline"):          # inline images belong to the body, not the clip list
+                    continue
+                atts.append({"id": a.get("id"), "name": a.get("name") or "attachment",
+                             "contentType": a.get("contentType") or "", "size": a.get("size") or 0})
+        except Exception:
+            pass
     return {
         "id": m.get("id"),
         "subject": m.get("subject") or "(no subject)",
@@ -321,7 +333,51 @@ async def get_message(session, msg_id):
         "received": m.get("receivedDateTime"),
         "bodyType": body.get("contentType", "text"),
         "body": body.get("content", ""),
+        "attachments": atts,
     }
+
+
+async def get_attachment(session, msg_id, att_id):
+    """Download one file attachment -> (filename, content_type, raw_bytes)."""
+    import base64
+    a = await _get(session, f"{_base()}/messages/{msg_id}/attachments/{att_id}")
+    return (a.get("name") or "attachment",
+            a.get("contentType") or "application/octet-stream",
+            base64.b64decode(a.get("contentBytes") or ""))
+
+
+async def mark_read(session, msg_id, read=True):
+    """Flag a message read/unread (Graph GET doesn't auto-mark-read like Outlook does)."""
+    token = await _valid_access_token(session)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", **UA}
+    async with session.patch(f"{GRAPH}{_base()}/messages/{msg_id}", json={"isRead": bool(read)},
+                             headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as r:
+        if r.status != 200:
+            raise RuntimeError(f"mark_read {r.status}: {(await r.text())[:120]}")
+    return True
+
+
+async def unread_count(session):
+    """Count of unread inbox messages (for the nav badge)."""
+    data = await _get(session, f"{_base()}/mailFolders/inbox",
+                      {"$select": "unreadItemCount"})
+    return int(data.get("unreadItemCount") or 0)
+
+
+async def forward_message(session, msg_id, to, comment=""):
+    """Forward a message (Graph's native forward re-attaches the original's files)."""
+    def rcpts(v):
+        if isinstance(v, str):
+            v = [x.strip() for x in v.replace(";", ",").split(",") if x.strip()]
+        return [{"emailAddress": {"address": x}} for x in (v or [])]
+    payload = {"comment": comment or "", "toRecipients": rcpts(to)}
+    token = await _valid_access_token(session)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", **UA}
+    async with session.post(f"{GRAPH}{_base()}/messages/{msg_id}/forward", json=payload,
+                            headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as r:
+        if r.status not in (200, 202):
+            raise RuntimeError(f"forward {r.status}: {(await r.text())[:200]}")
+    return True
 
 
 async def send_message(session, to, subject, text, cc=None):
