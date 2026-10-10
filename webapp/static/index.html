@@ -746,8 +746,8 @@
   <div id="msgview" class="view" style="padding:6px 12px;">
     <div class="chart-top">
       <button class="btn" onclick="showMonitor()">← Monitor</button>
-      <button class="btn" id="msg-refresh" onclick="loadInbox(true)">↻ Refresh</button>
       <button class="btn" id="msg-compose-btn" onclick="msgCompose()">✎ Compose</button>
+      <span id="msg-live" style="color:var(--dim);font-size:11px;align-self:center;">⟳ auto-refresh</span>
       <span class="msg-folders" id="msg-folders"></span>
       <span class="msg-acct" id="msg-acct"></span>
       <span class="ctitle" style="margin-left:auto">MESSAGES</span>
@@ -1995,7 +1995,7 @@ async function loadInbox(force){
   const setup=document.getElementById("msg-setup"), split=document.getElementById("msg-split");
   const list=document.getElementById("msg-list"), acct=document.getElementById("msg-acct");
   document.getElementById("msg-compose-btn").style.display=window.MAIL_READY?"":"none";
-  document.getElementById("msg-refresh").style.display=window.MAIL_READY?"":"none";
+  { const lv=document.getElementById("msg-live"); if(lv) lv.style.display=window.MAIL_READY?"":"none"; }
   if(!window.MAIL_READY){ split.style.display="none"; setup.style.display=""; setup.innerHTML=msgSetupHtml(); acct.textContent=""; return; }
   setup.style.display="none"; split.style.display=""; msgShowList();
   if(force||!msgState.list.length) list.innerHTML=`<div class="msg-empty">Loading…</div>`;
@@ -2111,7 +2111,7 @@ function showMsgToast(from, subject){
     <div class="mt-from">${esc(from||"New message")}</div>
     ${subject?`<div class="mt-subj">${esc(subject)}</div>`:""}`;
   requestAnimationFrame(()=>t.classList.add("show"));
-  clearTimeout(_toastHideT); _toastHideT=setTimeout(hideMsgToast, 8000);
+  clearTimeout(_toastHideT);     // no auto-hide — the pop-up stays until it's clicked
   // OS-level toast too, so it pops even when the terminal isn't focused (best-effort)
   try{
     if("Notification" in window && Notification.permission==="granted" && document.hidden){
@@ -2124,8 +2124,15 @@ function hideMsgToast(){ const t=document.getElementById("msg-toast"); if(t)t.cl
 async function pollMail(){
   if(!window.MAIL_READY) return;
   try{
-    const d=await(await fetch("/api/mail/messages?folder=inbox&top=10")).json();
+    const d=await(await fetch("/api/mail/messages?folder=inbox&top=30")).json();
     if(!d.configured || !Array.isArray(d.messages)) return;
+    // auto-refresh the visible inbox list (skip while reading a message or in another folder)
+    const mv=document.getElementById("msgview");
+    if(mv && mv.classList.contains("active") && msgState.folder==="inbox" && msgState.sel===null){
+      msgState.loaded=true; msgState.acct=d.email; msgState.list=d.messages;
+      const acct=document.getElementById("msg-acct"); if(acct&&d.email) acct.textContent="— "+d.email;
+      renderMsgList();
+    }
     const ids=d.messages.map(m=>m.id);
     if(_mailSeen===null){ _mailSeen=new Set(ids); return; }   // baseline: don't toast existing mail
     const fresh=d.messages.filter(m=>!_mailSeen.has(m.id));
@@ -2144,7 +2151,7 @@ function startMailNotify(){
   }
   clearInterval(_mailTimer);
   pollMail();                                  // baseline the current inbox now
-  _mailTimer=setInterval(pollMail, 45000);     // then check every 45s
+  _mailTimer=setInterval(pollMail, 30000);     // then auto-refresh + check for new mail every 30s
 }
 startMailNotify();
 window._testMsgToast=()=>showMsgToast("Robert Kessler","Re: Rosenberg — Breakfast with Dave");
