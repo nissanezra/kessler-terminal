@@ -513,10 +513,16 @@
   /* Bloomberg-style new-message pop-up */
   #msg-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-160%);
     z-index:99999;background:#000;border:1px solid var(--amber);border-radius:6px;
-    padding:9px 16px 10px;min-width:230px;max-width:min(90vw,440px);cursor:pointer;
+    padding:9px 16px 10px;min-width:230px;max-width:min(90vw,440px);cursor:move;
+    user-select:none;touch-action:none;
     box-shadow:0 8px 30px rgba(0,0,0,.7);opacity:0;
     transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .28s ease;}
-  #msg-toast.show{transform:translateX(-50%) translateY(0);opacity:1;}
+  #msg-toast.show{transform:translateX(-50%) translateY(0);opacity:1;
+    animation:mailBeat 1.05s ease-in-out infinite;}
+  @keyframes mailBeat{
+    0%,100%{ box-shadow:0 8px 26px rgba(0,0,0,.7), 0 0 0 0 rgba(255,175,0,.55); border-color:var(--amber); }
+    50%{ box-shadow:0 8px 40px rgba(0,0,0,.85), 0 0 0 12px rgba(255,175,0,0); border-color:#ffd24a; }
+  }
   #msg-toast .mt-hd{color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.05em;
     display:flex;align-items:center;gap:7px;}
   #msg-toast .mt-from{color:var(--white);font-size:14px;font-weight:700;margin-top:5px;
@@ -2166,17 +2172,16 @@ let _mailSeen=null, _mailTimer=null, _toastHideT=null;
 function showMsgToast(from, subject){
   let t=document.getElementById("msg-toast");
   if(!t){ t=document.createElement("div"); t.id="msg-toast";
-    t.onclick=()=>{ hideMsgToast(); showMessages(); };
-    document.body.appendChild(t); }
-  t.innerHTML=`<div class="mt-hd">✉ K TERMINAL MAIL</div>
+    document.body.appendChild(t); _makeToastDraggable(t, ()=>{ hideMsgToast(); showMessages(); }); }
+  t.innerHTML=`<div class="mt-hd">✉ K Mail</div>
     <div class="mt-from">${esc(from||"New message")}</div>
     ${subject?`<div class="mt-subj">${esc(subject)}</div>`:""}`;
   requestAnimationFrame(()=>t.classList.add("show"));
-  clearTimeout(_toastHideT);     // no auto-hide — the pop-up stays until it's clicked
+  clearTimeout(_toastHideT);     // no auto-hide — the pop-up stays until it's clicked (or dragged)
   // OS-level toast too, so it pops even when the terminal isn't focused (best-effort)
   try{
     if("Notification" in window && Notification.permission==="granted" && document.hidden){
-      const n=new Notification("K Terminal Mail",{body:(from?from+" — ":"")+(subject||"New message")});
+      const n=new Notification("K Mail",{body:(from?from+" — ":"")+(subject||"New message")});
       n.onclick=()=>{ try{window.focus();}catch(e){} showMessages(); n.close(); };
     }
   }catch(e){}
