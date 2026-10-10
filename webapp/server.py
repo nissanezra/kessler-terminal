@@ -78,8 +78,16 @@ MIRROR_FILE = HERE / ".research_mirror"
 
 
 def save_mirror_cfg(url, key):
-    blob = json.dumps({"url": url.strip().rstrip("/"), "key": key.strip()}).encode()
-    MIRROR_FILE.write_bytes(base64.b64encode(_gk_xor(blob)))
+    # Plaintext local file (perms 600). Was obfuscated with a hostname-derived key, but
+    # platform.node() changes (networks / macOS "Mac.lan" resets) and then the file could
+    # no longer be decoded -> _mirror_cfg() returned None -> notes/shared silently saved
+    # locally instead of syncing. The mirror key is a local-only machine key (also lives in
+    # kessler-terminal-access.txt), so plaintext-at-600 is consistent with the other creds.
+    MIRROR_FILE.write_text(json.dumps({"url": url.strip().rstrip("/"), "key": key.strip()}))
+    try:
+        os.chmod(MIRROR_FILE, 0o600)
+    except Exception:
+        pass
 
 
 def _mirror_cfg():
@@ -87,7 +95,13 @@ def _mirror_cfg():
     key = os.environ.get("RESEARCH_MIRROR_KEY", "").strip()
     if url and key:
         return url.rstrip("/"), key
-    try:
+    try:                                          # current format: plaintext JSON
+        d = json.loads(MIRROR_FILE.read_text())
+        if d.get("url") and d.get("key"):
+            return d["url"].rstrip("/"), d["key"]
+    except Exception:
+        pass
+    try:                                          # legacy format: hostname-obfuscated
         d = json.loads(_gk_xor(base64.b64decode(MIRROR_FILE.read_bytes())).decode())
         return d["url"].rstrip("/"), d["key"]
     except Exception:
