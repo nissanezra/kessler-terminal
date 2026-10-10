@@ -91,6 +91,10 @@ def save_mirror_cfg(url, key):
 
 
 def _mirror_cfg():
+    # The shared CLOUD app is the mirror/relay SOURCE, never a client — if a stray
+    # .research_mirror ever lands in its image it must NOT make it relay to itself.
+    if os.environ.get("MKT_PASSWORD"):
+        return None
     url = os.environ.get("RESEARCH_MIRROR_URL", "").strip()
     key = os.environ.get("RESEARCH_MIRROR_KEY", "").strip()
     if url and key:
