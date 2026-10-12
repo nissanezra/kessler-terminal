@@ -312,18 +312,47 @@ async def get_message(session, msg_id):
     params = {"$select": "subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments"}
     m = await _get(session, f"{_base()}/messages/{msg_id}", params)
     body = m.get("body", {})
+    body_type = body.get("contentType", "text")
+    body_html = body.get("content", "")
     atts = []
+    extra_imgs = []                             # inline images not referenced by a cid:
     if m.get("hasAttachments"):
         try:
             ad = await _get(session, f"{_base()}/messages/{msg_id}/attachments",
-                            {"$select": "id,name,contentType,size,isInline"})
+                            {"$select": "id,name,contentType,size,isInline,contentId"})
             for a in ad.get("value", []):
-                if a.get("isInline"):          # inline images belong to the body, not the clip list
+                ctype = a.get("contentType") or ""
+                if a.get("isInline") and ctype.startswith("image/"):
+                    # pull the image bytes and show it IN the message (embedded PNG/JPG etc.)
+                    try:
+                        cb = (await _get(session,
+                              f"{_base()}/messages/{msg_id}/attachments/{a['id']}")).get("contentBytes")
+                    except Exception:
+                        cb = None
+                    if cb:
+                        datauri = f"data:{ctype};base64,{cb}"
+                        cid = (a.get("contentId") or "").strip("<>")
+                        if body_type == "html" and cid and f"cid:{cid}" in body_html:
+                            body_html = body_html.replace(f"cid:{cid}", datauri)
+                        else:
+                            extra_imgs.append(datauri)
+                    continue
+                if a.get("isInline"):           # inline non-image -> skip the clip list
                     continue
                 atts.append({"id": a.get("id"), "name": a.get("name") or "attachment",
-                             "contentType": a.get("contentType") or "", "size": a.get("size") or 0})
+                             "contentType": ctype, "size": a.get("size") or 0})
         except Exception:
             pass
+    # inline images with no cid reference (or a plain-text body) -> append them so they still show
+    if extra_imgs:
+        imgs = "".join(f'<img src="{u}" style="max-width:100%;height:auto;display:block;margin:10px 0;">'
+                       for u in extra_imgs)
+        if body_type == "html":
+            body_html += imgs
+        else:
+            import html as _h
+            body_html = "<div style='white-space:pre-wrap;font-family:sans-serif'>" + _h.escape(body_html) + "</div>" + imgs
+            body_type = "html"
     return {
         "id": m.get("id"),
         "subject": m.get("subject") or "(no subject)",
@@ -331,8 +360,8 @@ async def get_message(session, msg_id):
         "to": [_addr(x) for x in m.get("toRecipients", [])],
         "cc": [_addr(x) for x in m.get("ccRecipients", [])],
         "received": m.get("receivedDateTime"),
-        "bodyType": body.get("contentType", "text"),
-        "body": body.get("content", ""),
+        "bodyType": body_type,
+        "body": body_html,
         "attachments": atts,
     }
 
