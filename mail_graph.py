@@ -317,27 +317,32 @@ async def get_message(session, msg_id):
     atts = []
     extra_imgs = []                             # inline images not referenced by a cid:
     if m.get("hasAttachments"):
+        from urllib.parse import quote as _q
         try:
             ad = await _get(session, f"{_base()}/messages/{msg_id}/attachments",
                             {"$select": "id,name,contentType,size,isInline,contentId"})
             for a in ad.get("value", []):
                 ctype = a.get("contentType") or ""
-                if a.get("isInline") and ctype.startswith("image/"):
-                    # pull the image bytes and show it IN the message (embedded PNG/JPG etc.)
+                is_img = ctype.startswith("image/")
+                cid = (a.get("contentId") or "").strip("<>")
+                # an image is "embedded" if the body references it by cid, OR Graph flags it inline
+                ref = bool(is_img and cid and body_type == "html" and f"cid:{cid}" in body_html)
+                if is_img and (a.get("isInline") or ref):
                     try:
                         cb = (await _get(session,
-                              f"{_base()}/messages/{msg_id}/attachments/{a['id']}")).get("contentBytes")
+                              f"{_base()}/messages/{msg_id}/attachments/{_q(a.get('id',''), safe='')}"
+                              )).get("contentBytes")
                     except Exception:
                         cb = None
                     if cb:
                         datauri = f"data:{ctype};base64,{cb}"
-                        cid = (a.get("contentId") or "").strip("<>")
-                        if body_type == "html" and cid and f"cid:{cid}" in body_html:
+                        if ref:
                             body_html = body_html.replace(f"cid:{cid}", datauri)
                         else:
                             extra_imgs.append(datauri)
-                    continue
-                if a.get("isInline"):           # inline non-image -> skip the clip list
+                        continue
+                    # couldn't fetch the bytes -> fall through to a download chip so it's still reachable
+                if a.get("isInline") and not is_img:     # inline non-image -> skip the clip list
                     continue
                 atts.append({"id": a.get("id"), "name": a.get("name") or "attachment",
                              "contentType": ctype, "size": a.get("size") or 0})
@@ -503,6 +508,28 @@ async def _cli():
             await poll_device_code(s, dc["device_code"],
                                    int(dc.get("interval", 5)), int(dc.get("expires_in", 900)))
             print("\n✓ signed in as", account_email(), "— token saved to", TOKEN_FILE)
+        elif cmd == "diag":
+            import re as _re
+            msgs = await list_messages(s, top=1)
+            if not msgs:
+                print("inbox empty"); return
+            mid = msgs[0]["id"]
+            print("latest:", (msgs[0]["subject"] or "")[:60])
+            mm = await _get(s, f"{_base()}/messages/{mid}", {"$select": "body,hasAttachments"})
+            b = mm.get("body") or {}
+            bc = b.get("content", "") or ""
+            print("bodyType:", b.get("contentType"), "| body chars:", len(bc),
+                  "| <img tags:", bc.count("<img"), "| cid: refs:", bc.count("cid:"))
+            for src in _re.findall(r'<img[^>]*src=[\'"]?([^\'" >]+)', bc)[:5]:
+                print("   img src[:90]:", src[:90])
+            if mm.get("hasAttachments"):
+                ad = await _get(s, f"{_base()}/messages/{mid}/attachments",
+                                {"$select": "id,name,contentType,size,isInline,contentId"})
+                for a in ad.get("value", []):
+                    print(f"   ATT name={a.get('name')!r} type={a.get('contentType')} "
+                          f"inline={a.get('isInline')} cid={a.get('contentId')!r} size={a.get('size')}")
+            else:
+                print("   (no attachments)")
         elif cmd == "whoami":
             print(await _cache_email(s) or "not signed in")
         elif cmd == "inbox":
