@@ -1023,6 +1023,10 @@ function renderGauge(d, el){
     </div>
     <div class="g-note">Mechanical read of daily indicators (price vs SMA/EMA 10&ndash;200, RSI, MACD). Not investment advice.</div>`;
 }
+/* technical gauge is built but PARKED — not shown in the live terminal yet.
+   To bring it back onto the ticker page, set GAUGE_ENABLED = true. All the code
+   (renderGauge, loadSecGauge, CSS, /api/gauge) stays in place. */
+let GAUGE_ENABLED = false;
 async function loadSecGauge(ticker){
   const el=document.getElementById("sec-gauge"); if(!el)return;
   el.innerHTML="<div class='g-load'>Loading technical gauge…</div>";
@@ -1779,7 +1783,7 @@ async function showSecurity(ticker){
       `<span class="hw">${esc(x.weight!=null?x.weight+'%':'')}</span></div>`).join("")+`</div>`;
   }
   document.getElementById("sec-holdings").innerHTML=hd;
-  loadSecGauge(ticker);          // technical buy/sell gauge (async, won't block the page)
+  if(GAUGE_ENABLED) loadSecGauge(ticker);   // technical gauge PARKED — flip GAUGE_ENABLED to true to revive
   // chart (awaited: a ticker with no quote, no fundamentals, no P/E AND no chart
   // data doesn't exist — bounce back to the monitor instead of an empty page)
   tfButtons("sec-tfbar",state.security.tf,"setSecTf","security");
