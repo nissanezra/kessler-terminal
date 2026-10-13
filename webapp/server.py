@@ -328,6 +328,81 @@ async def _econ_fetch(session):
     return rows
 
 
+# ---- TECHNICAL GAUGE (mechanical buy/sell read from a basket of indicators) ----
+# TradingView-style technical rating: price vs moving averages (SMA/EMA 10-200) +
+# oscillators (RSI, MACD). Aggregated to a -1..+1 score and a Strong Sell..Strong Buy
+# label. A deterministic read of indicators, NOT investment advice.
+_GAUGE_NAMES = {"@TY.1": "10Y U.S. T-NOTE FUTURE", "@TU.1": "2Y U.S. T-NOTE FUTURE",
+                "@FV.1": "5Y U.S. T-NOTE FUTURE", "@TN.1": "ULTRA 10Y FUTURE",
+                "@US.1": "U.S. T-BOND FUTURE"}
+
+
+def _g_ema(vals, n):
+    k = 2.0 / (n + 1); e = vals[0]; out = [e]
+    for v in vals[1:]:
+        e = v * k + e * (1 - k); out.append(e)
+    return out
+
+
+def _g_rsi(c, n=14):
+    if len(c) < n + 1:
+        return None
+    g = l = 0.0
+    for i in range(-n, 0):
+        d = c[i] - c[i - 1]
+        if d >= 0:
+            g += d
+        else:
+            l -= d
+    ag, al = g / n, l / n
+    return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+
+def _tech_gauge(bars, ticker):
+    c = [b["c"] for b in (bars or []) if b.get("c") is not None]
+    if len(c) < 30:
+        return None
+    p = c[-1]
+    ma, osc = [], []
+    for n in (10, 20, 50, 100, 200):
+        if len(c) >= n:
+            m = sum(c[-n:]) / n
+            ma.append({"name": f"SMA {n}", "state": 1 if p > m else -1 if p < m else 0})
+    for n in (10, 20, 50):
+        if len(c) >= n:
+            e = _g_ema(c, n)[-1]
+            ma.append({"name": f"EMA {n}", "state": 1 if p > e else -1 if p < e else 0})
+    rsi = _g_rsi(c)
+    if rsi is not None:
+        osc.append({"name": "RSI (14)", "state": 1 if rsi < 30 else -1 if rsi > 70 else 0,
+                    "val": round(rsi, 1)})
+    if len(c) >= 35:
+        macd = [a - b for a, b in zip(_g_ema(c, 12), _g_ema(c, 26))]
+        sig = _g_ema(macd, 9)
+        osc.append({"name": "MACD (12,26)", "state": 1 if macd[-1] > sig[-1] else -1 if macd[-1] < sig[-1] else 0})
+    sigs = ma + osc
+    bull = sum(1 for s in sigs if s["state"] > 0)
+    bear = sum(1 for s in sigs if s["state"] < 0)
+    score = (bull - bear) / len(sigs)
+    rating = ("STRONG BUY" if score > 0.5 else "BUY" if score > 0.1 else
+              "STRONG SELL" if score < -0.5 else "SELL" if score < -0.1 else "NEUTRAL")
+    return {"ticker": ticker, "name": _GAUGE_NAMES.get(ticker, ticker), "price": round(p, 3),
+            "score": round(score, 3), "rating": rating, "bull": bull, "bear": bear,
+            "neutral": len(sigs) - bull - bear, "ma": ma, "osc": osc}
+
+
+async def api_gauge(request):
+    ticker = request.query.get("ticker", "@TY.1").strip()
+    try:
+        bars = await td.fetch_history(request.app["session"], ticker, "1Y")
+    except Exception as e:
+        return web.json_response({"error": str(e)[:160]}, status=502)
+    g = _tech_gauge(bars, ticker)
+    if not g:
+        return web.json_response({"error": "not enough history"}, status=404)
+    return web.json_response(g)
+
+
 async def api_econ(request):
     """Today's economic releases. Desktops (mirror configured) pull the list from the shared
     cloud app so only ONE IP ever hits the rate-limited ForexFactory feed and every surface
@@ -3068,6 +3143,7 @@ def make_app():
     app.router.add_get("/ws", api_ws)
     app.router.add_get("/api/monitor", api_monitor)
     app.router.add_get("/api/econ", api_econ)
+    app.router.add_get("/api/gauge", api_gauge)
     app.router.add_get("/api/sections", api_sections)
     app.router.add_post("/api/add", api_add)
     app.router.add_get("/api/chart", api_chart)

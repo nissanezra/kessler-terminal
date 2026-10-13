@@ -145,6 +145,23 @@
   .econ-row .e-act.e-up{color:var(--green);} .econ-row .e-act.e-down{color:var(--red);}
   .econ-row .e-act.e-neu{color:var(--white);} .econ-row .e-act.e-due{color:#6f6f6f;font-weight:400;}
   .econ-row .e-cons{color:var(--dim);text-align:right;font-size:11px;}
+  /* ---- technical buy/sell gauge ---- */
+  .g-head{color:var(--amber);font-weight:700;font-size:13px;padding:2px 0 6px;overflow:hidden;}
+  .g-head .g-tk{color:var(--dim);font-weight:400;} .g-head .g-px{color:#fff;float:right;}
+  .g-gaugewrap{text-align:center;}
+  .g-svg{width:300px;max-width:100%;height:auto;}
+  .g-rating{font-size:26px;font-weight:800;letter-spacing:.06em;margin-top:-10px;}
+  .g-counts{font-size:12px;color:var(--dim);margin:2px 0 10px;}
+  .g-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:470px;margin:0 auto;}
+  .g-ch{color:var(--amber);font-size:11px;font-weight:700;border-bottom:1px solid #333;padding-bottom:2px;margin-bottom:4px;letter-spacing:.05em;}
+  .g-row{display:flex;align-items:center;gap:7px;font-size:12.5px;line-height:1.75;}
+  .g-nm{color:var(--price);flex:1;} .g-val{color:var(--dim);font-size:11px;}
+  .g-dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .g-zl{font-size:11px;font-weight:700;}
+  .g-note{color:#6f6f6f;font-size:10.5px;font-style:italic;text-align:center;margin:12px auto 0;max-width:470px;}
+  .sec-gauge{margin:12px 0 6px;border:1px solid #2a2a2a;border-radius:6px;padding:12px 14px;background:#0c0c0c;}
+  .sec-gauge:empty{display:none;}
+  .sec-gauge .g-load{color:var(--dim);font-size:12px;font-style:italic;}
   /* ---- shared chart ---- */
   .chart-top{display:flex;align-items:center;gap:14px;margin-bottom:4px;flex-wrap:wrap;}
   .btn{color:var(--amber);background:#1a1a1a;border:none;padding:3px 9px;cursor:pointer;font-family:var(--mono);font-size:13px;}
@@ -645,6 +662,7 @@
     <div id="sec-fund"></div>
     <div id="sec-pe"></div>
     <div id="sec-holdings"></div>
+    <div id="sec-gauge" class="sec-gauge"></div>
     <div class="chart-top"><div class="tfbar" id="sec-tfbar"></div><span class="crange" id="sec-range"></span><span class="ctitle" style="margin-left:auto">Chart</span></div>
     <div class="daterow" id="sec-daterow"><input type="date" id="sec-from"><span class="dsep">→</span>
       <input type="date" id="sec-to"><button class="btn" onclick="applyCustom('security')">Go</button></div>
@@ -973,6 +991,47 @@ function renderEcon(){
 }
 fetchEcon();
 setInterval(fetchEcon,5*60*1000);   // actuals print through the day
+/* ---- technical buy/sell gauge (mechanical indicator read) ---- */
+function _gaugeArc(cx,cy,r,a1,a2){
+  const p=a=>[cx+r*Math.cos(a*Math.PI/180), cy-r*Math.sin(a*Math.PI/180)];
+  const[x1,y1]=p(a1),[x2,y2]=p(a2);
+  return `M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+}
+function renderGauge(d, el){
+  const cx=150,cy=150,R=118,sw=22;
+  const zones=[["#b00000",180,144],["#ff5a3c",144,108],["#7a7a7a",108,72],["#3f9e2f",72,36],["#00c000",36,0]];
+  const arcs=zones.map(z=>`<path d="${_gaugeArc(cx,cy,R-sw/2,z[1],z[2])}" stroke="${z[0]}" stroke-width="${sw}" fill="none"/>`).join("");
+  const ang=90-Math.max(-1,Math.min(1,d.score))*90;
+  const nx=cx+(R-sw-6)*Math.cos(ang*Math.PI/180), ny=cy-(R-sw-6)*Math.sin(ang*Math.PI/180);
+  const rc=d.rating.includes("BUY")?"#00c000":d.rating.includes("SELL")?"#ff5a3c":"#c9c9c9";
+  const dot=s=>`<span class="g-dot" style="background:${s>0?'#00c000':s<0?'#ff5a3c':'#7a7a7a'}"></span>`;
+  const rows=a=>a.map(x=>`<div class="g-row"><span class="g-nm">${esc(x.name)}</span>${x.val!==undefined?`<span class="g-val">${x.val}</span>`:""}${dot(x.state)}</div>`).join("");
+  el.innerHTML=`
+    <div class="g-head">${esc(d.name)} <span class="g-tk">${esc(d.ticker)}</span> <span class="g-px">${d.price}</span></div>
+    <div class="g-gaugewrap">
+      <svg viewBox="0 0 300 166" class="g-svg">${arcs}
+        <line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="#fff" stroke-width="3"/>
+        <circle cx="${cx}" cy="${cy}" r="6" fill="#fff"/>
+        <text x="16" y="162" class="g-zl" fill="#ff5a3c">SELL</text>
+        <text x="284" y="162" class="g-zl" fill="#00c000" text-anchor="end">BUY</text></svg>
+      <div class="g-rating" style="color:${rc}">${esc(d.rating)}</div>
+      <div class="g-counts"><span style="color:#ff5a3c">Sell ${d.bear}</span> &middot; <span style="color:#9a9a9a">Neutral ${d.neutral}</span> &middot; <span style="color:#00c000">Buy ${d.bull}</span></div>
+    </div>
+    <div class="g-cols">
+      <div class="g-col"><div class="g-ch">MOVING AVERAGES</div>${rows(d.ma)}</div>
+      <div class="g-col"><div class="g-ch">OSCILLATORS</div>${rows(d.osc)}</div>
+    </div>
+    <div class="g-note">Mechanical read of daily indicators (price vs SMA/EMA 10&ndash;200, RSI, MACD). Not investment advice.</div>`;
+}
+async function loadSecGauge(ticker){
+  const el=document.getElementById("sec-gauge"); if(!el)return;
+  el.innerHTML="<div class='g-load'>Loading technical gauge…</div>";
+  try{
+    const g=await(await fetch(`/api/gauge?ticker=${encodeURIComponent(ticker)}`)).json();
+    if(state.security.ticker!==ticker)return;             // user moved to another ticker
+    if(g&&g.rating){ renderGauge(g, el); } else { el.innerHTML=""; }   // hide if no signal
+  }catch(e){ el.innerHTML=""; }
+}
 async function loadMonitor(){
   let data; try{data=await(await fetch("/api/monitor")).json();}catch(e){return;}
   renderMonitor(data);
@@ -1685,6 +1744,7 @@ async function showSecurity(ticker){
   document.getElementById("sec-fund").innerHTML="<p class='dim'>Loading data…</p>";
   document.getElementById("sec-pe").innerHTML="";
   document.getElementById("sec-holdings").innerHTML="";
+  document.getElementById("sec-gauge").innerHTML="";
   document.getElementById("sec-desc").innerHTML="";
   let d; try{d=await(await fetch(`/api/security?ticker=${encodeURIComponent(ticker)}`)).json();}
   catch(e){ if(state.security.ticker===ticker){setLoading(false);
@@ -1719,6 +1779,7 @@ async function showSecurity(ticker){
       `<span class="hw">${esc(x.weight!=null?x.weight+'%':'')}</span></div>`).join("")+`</div>`;
   }
   document.getElementById("sec-holdings").innerHTML=hd;
+  loadSecGauge(ticker);          // technical buy/sell gauge (async, won't block the page)
   // chart (awaited: a ticker with no quote, no fundamentals, no P/E AND no chart
   // data doesn't exist — bounce back to the monitor instead of an empty page)
   tfButtons("sec-tfbar",state.security.tf,"setSecTf","security");
