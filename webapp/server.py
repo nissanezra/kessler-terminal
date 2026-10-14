@@ -268,10 +268,12 @@ async def _econ_ff_events(session, today):
     return ev
 
 
-async def _econ_nasdaq_map(session, today):
-    """Nasdaq actuals for today +/- 1 day (absorbs Nasdaq's date drift), cached ~4 min."""
+async def _econ_nasdaq_map(session, today, fresh=False):
+    """Nasdaq actuals for today +/- 1 day (absorbs Nasdaq's date drift). Cached ~60s, but
+    `fresh` bypasses the cache so a release prints the moment it posts (burst-poll at 8:30)."""
     import time as _time
-    if _NAS_CACHE["map"] and _time.time() - _NAS_CACHE["t"] < 240:
+    ttl = 10 if fresh else 60        # fresh still floors at 10s so multi-surface bursts dedupe
+    if _NAS_CACHE["map"] and _time.time() - _NAS_CACHE["t"] < ttl:
         return _NAS_CACHE["map"]
     nmap = []
     for off in (0, -1, 1):
@@ -295,10 +297,10 @@ async def _econ_nasdaq_map(session, today):
     return _NAS_CACHE["map"]
 
 
-async def _econ_fetch(session):
+async def _econ_fetch(session, fresh=False):
     today = _et_today()              # robust ET date (handles Fly's UTC clock)
     ev = await _econ_ff_events(session, today)
-    nmap = await _econ_nasdaq_map(session, today)
+    nmap = await _econ_nasdaq_map(session, today, fresh=fresh)
     if _ECON_SEEN["day"] != today:               # reset the sticky set on a new ET day
         _ECON_SEEN["day"] = today
         _ECON_SEEN["actuals"] = {}
@@ -407,11 +409,15 @@ async def api_econ(request):
     """Today's economic releases. Desktops (mirror configured) pull the list from the shared
     cloud app so only ONE IP ever hits the rate-limited ForexFactory feed and every surface
     shows the same complete list (incl. FOMC Minutes). The cloud app computes it itself."""
+    fresh = request.query.get("fresh") in ("1", "true", "yes")   # burst-poll bypasses the cache
     cfg = _mirror_cfg()
     if cfg:                                   # desktop -> read from the cloud app
         url, key = cfg
+        params = {"k": key}
+        if fresh:
+            params["fresh"] = "1"             # forward the no-cache flag to the source
         try:
-            async with request.app["session"].get(f"{url}/api/econ", params={"k": key},
+            async with request.app["session"].get(f"{url}/api/econ", params=params,
                                                    timeout=aiohttp.ClientTimeout(total=15)) as r:
                 if r.status == 200:
                     data = await r.json(content_type=None)
@@ -420,7 +426,7 @@ async def api_econ(request):
         except Exception:
             pass
         # relay unreachable -> fall through to a direct fetch (best effort)
-    return web.json_response({"rows": await _econ_fetch(request.app["session"])})
+    return web.json_response({"rows": await _econ_fetch(request.app["session"], fresh=fresh)})
 
 
 async def api_ws(request):

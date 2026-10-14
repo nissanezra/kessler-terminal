@@ -958,10 +958,22 @@ function renderMonitor(data){
   renderEcon();   // append TODAY'S ECONOMIC RELEASES into the rightmost column
 }
 /* ---- TODAY'S ECONOMIC RELEASES (rightmost column, under CREDIT STRESS) ---- */
-let _econData=null;
+let _econData=null, _econTimer=null;
+function _econMin(t){ const m=/^(\d+):(\d+)([ap])$/.exec((t||"").trim()); if(!m)return null;
+  let h=(+m[1])%12; if(m[3]==="p")h+=12; return h*60+(+m[2]); }
+// "hot" = within a minute before, to ~8 min after, a scheduled release that hasn't printed yet
+function _econHot(){
+  if(!_econData)return false;
+  const n=new Date(), cur=n.getHours()*60+n.getMinutes();
+  return _econData.some(e=>{ if(e.state!=="due")return false; const rm=_econMin(e.time);
+    return rm!=null && cur>=rm-1 && cur<=rm+8; });
+}
 async function fetchEcon(){
-  try{ const d=await(await fetch("/api/econ")).json(); _econData=d.rows||[]; }catch(e){}
+  const hot=_econHot();   // ask the server to bypass its cache right around a release
+  try{ const d=await(await fetch("/api/econ"+(hot?"?fresh=1":""))).json(); _econData=d.rows||[]; }catch(e){}
   renderEcon();
+  clearTimeout(_econTimer);
+  _econTimer=setTimeout(fetchEcon, _econHot()?15000:300000);   // 15s burst near a release, else 5 min
 }
 function renderEcon(){
   if(!_econData)return;
@@ -989,8 +1001,7 @@ function renderEcon(){
   h+=`</div>`;
   col.insertAdjacentHTML("beforeend",h);
 }
-fetchEcon();
-setInterval(fetchEcon,5*60*1000);   // actuals print through the day
+fetchEcon();   // self-schedules: 15s burst around release times, 5 min otherwise
 /* ---- technical buy/sell gauge (mechanical indicator read) ---- */
 function _gaugeArc(cx,cy,r,a1,a2){
   const p=a=>[cx+r*Math.cos(a*Math.PI/180), cy-r*Math.sin(a*Math.PI/180)];
