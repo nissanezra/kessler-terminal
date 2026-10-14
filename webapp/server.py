@@ -56,7 +56,14 @@ def _gk_xor(data):
 
 
 def save_gemini_key(key):
-    GEMINI_KEY_FILE.write_bytes(base64.b64encode(_gk_xor(key.strip().encode())))
+    # Plaintext (perms 600). Was hostname-obfuscated, but platform.node() changes
+    # (e.g. macOS resets to "Mac.lan") and then the key could no longer be decoded ->
+    # AI features silently went dead. Local-only file; the key is also a Fly secret.
+    GEMINI_KEY_FILE.write_text(key.strip())
+    try:
+        os.chmod(GEMINI_KEY_FILE, 0o600)
+    except Exception:
+        pass
 
 
 def _gemini_key():
@@ -64,6 +71,12 @@ def _gemini_key():
     if k:
         return k
     try:
+        t = GEMINI_KEY_FILE.read_text().strip()
+    except Exception:
+        t = ""
+    if t and ("." in t or t.startswith("AIza")):   # plaintext key (new "AQ.Ab8…" has a dot)
+        return t
+    try:                                            # legacy hostname-obfuscated file
         return _gk_xor(base64.b64decode(GEMINI_KEY_FILE.read_bytes())).decode().strip()
     except Exception:
         return ""
