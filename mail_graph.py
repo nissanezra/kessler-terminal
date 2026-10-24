@@ -525,18 +525,24 @@ async def _cli():
             mm = await _get(s, f"{_base()}/messages/{mid}", {"$select": "body,hasAttachments"})
             b = mm.get("body") or {}
             bc = b.get("content", "") or ""
+            print("hasAttachments flag:", mm.get("hasAttachments"))
             print("bodyType:", b.get("contentType"), "| body chars:", len(bc),
                   "| <img tags:", bc.count("<img"), "| cid: refs:", bc.count("cid:"))
-            for src in _re.findall(r'<img[^>]*src=[\'"]?([^\'" >]+)', bc)[:5]:
-                print("   img src[:90]:", src[:90])
-            if mm.get("hasAttachments"):
-                ad = await _get(s, f"{_base()}/messages/{mid}/attachments",
-                                {"$select": "id,name,contentType,size,isInline,contentId"})
-                for a in ad.get("value", []):
-                    print(f"   ATT name={a.get('name')!r} type={a.get('contentType')} "
-                          f"inline={a.get('isInline')} cid={a.get('contentId')!r} size={a.get('size')}")
-            else:
-                print("   (no attachments)")
+            for src in _re.findall(r'<img[^>]*src=[\'"]?([^\'" >]+)', bc)[:8]:
+                kind = ("CID" if src.lower().startswith("cid:")
+                        else "DATA" if src.lower().startswith("data:")
+                        else "HTTP" if src.lower().startswith(("http:", "https:"))
+                        else "OTHER")
+                print(f"   img[{kind}] src[:90]:", src[:90])
+            # always list attachments — Graph hides inline-only images behind hasAttachments=false
+            ad = await _get(s, f"{_base()}/messages/{mid}/attachments",
+                            {"$select": "id,name,contentType,size,isInline,contentId"})
+            vals = ad.get("value", [])
+            if not vals:
+                print("   (no attachments returned by Graph)")
+            for a in vals:
+                print(f"   ATT name={a.get('name')!r} type={a.get('contentType')} "
+                      f"inline={a.get('isInline')} cid={a.get('contentId')!r} size={a.get('size')}")
         elif cmd == "whoami":
             print(await _cache_email(s) or "not signed in")
         elif cmd == "inbox":
