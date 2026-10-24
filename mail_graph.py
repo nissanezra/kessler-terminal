@@ -26,6 +26,7 @@ CLI:
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -316,7 +317,10 @@ async def get_message(session, msg_id):
     body_html = body.get("content", "")
     atts = []
     extra_imgs = []                             # inline images not referenced by a cid:
-    if m.get("hasAttachments"):
+    # Graph reports hasAttachments=false when a message's ONLY attachments are inline
+    # images (a signature logo, an embedded chart). So also look when the HTML body
+    # carries a cid: reference — otherwise those stay unresolved and show as broken boxes.
+    if m.get("hasAttachments") or (body_type == "html" and "cid:" in body_html.lower()):
         from urllib.parse import quote as _q
         try:
             ad = await _get(session, f"{_base()}/messages/{msg_id}/attachments",
@@ -325,8 +329,10 @@ async def get_message(session, msg_id):
                 ctype = a.get("contentType") or ""
                 is_img = ctype.startswith("image/")
                 cid = (a.get("contentId") or "").strip("<>")
-                # an image is "embedded" if the body references it by cid, OR Graph flags it inline
-                ref = bool(is_img and cid and body_type == "html" and f"cid:{cid}" in body_html)
+                # an image is "embedded" if the body references it by cid, OR Graph flags it inline.
+                # match the cid case-insensitively so the image lands in place, not at the bottom.
+                ref = bool(is_img and cid and body_type == "html"
+                           and f"cid:{cid}".lower() in body_html.lower())
                 if is_img and (a.get("isInline") or ref):
                     try:
                         cb = (await _get(session,
@@ -337,7 +343,8 @@ async def get_message(session, msg_id):
                     if cb:
                         datauri = f"data:{ctype};base64,{cb}"
                         if ref:
-                            body_html = body_html.replace(f"cid:{cid}", datauri)
+                            body_html = re.sub(r"cid:" + re.escape(cid), datauri,
+                                               body_html, flags=re.IGNORECASE)
                         else:
                             extra_imgs.append(datauri)
                         continue
