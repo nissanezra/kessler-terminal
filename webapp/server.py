@@ -888,6 +888,694 @@ async def api_mail_unread(request):
         return web.json_response({"configured": True, "count": 0, "error": str(e)[:120]})
 
 
+# ---- FORECAST: 10Y calibrated band (experiment) --------------------------
+# Self-contained: computes a volatility band for the US 10Y yield from the
+# terminal's OWN daily FRED data (DGS10). The band IS the forecast — direction
+# is a coin flip out of sample, so this is never a buy/sell call, only a range.
+# Experiment gate: shown only on Ezra's Mac (Darwin, no cloud password) until
+# promoted; invisible/404 on Robert's Windows and the Fly app.
+_FORECAST_CACHE = {"t": 0.0, "data": None}
+ZN_DV01 = 71.0          # ~$ per 1bp per /ZN contract at the note's current duration (approx, labelled)
+
+
+def _forecast_ready():
+    return platform.system() == "Darwin" and not os.environ.get("MKT_PASSWORD")
+
+
+def _norm_cdf(x):
+    import math
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+async def _fred_monthly(session, series_id, units="lin", start="2000-01-01"):
+    """FRED series as {YYYY-MM: value}, monthly (daily series averaged to the month)."""
+    key = td._fred_key()
+    if not key:
+        return {}
+    params = {"series_id": series_id, "api_key": key, "file_type": "json",
+              "observation_start": start, "sort_order": "asc", "units": units,
+              "frequency": "m", "aggregation_method": "avg"}
+    async with session.get(td.FRED_OBS, params=params,
+                           timeout=aiohttp.ClientTimeout(total=15)) as r:
+        d = await r.json(content_type=None)
+    out = {}
+    for o in d.get("observations", []):
+        v = o.get("value")
+        if v not in (".", "", None):
+            out[o["date"][:7]] = float(v)
+    return out
+
+
+async def _fred_last(session, series_id):
+    """(date, value) of the most recent valid observation of a FRED series, else (None, None)."""
+    key = td._fred_key()
+    if not key:
+        return None, None
+    start = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+    params = {"series_id": series_id, "api_key": key, "file_type": "json",
+              "observation_start": start, "sort_order": "desc"}
+    async with session.get(td.FRED_OBS, params=params,
+                           timeout=aiohttp.ClientTimeout(total=15)) as r:
+        d = await r.json(content_type=None)
+    for o in d.get("observations", []):
+        if o.get("value") not in (".", "", None):
+            return o["date"], float(o["value"])
+    return None, None
+
+
+async def _forecast_fundamental(session, last10y):
+    """Fair-value anchor for the 10Y: a regression on the 2Y (the market's expected Fed
+    path) and core CPI (inflation), fit on 2000-present monthly data, then evaluated at the
+    latest readings. The gap (current - fair) is a slow 6-18mo gravity, not a timing signal.
+    Plus the real-yield / breakeven split, since the repricing has been mostly real rates.
+    Returns a dict, or None if the data or numpy aren't available."""
+    try:
+        import numpy as np
+        y = await _fred_monthly(session, "DGS10")
+        y2 = await _fred_monthly(session, "DGS2")
+        cpi = await _fred_monthly(session, "CPILFESL", "pc1")
+        months = sorted(set(y) & set(y2) & set(cpi))
+        if len(months) < 60:
+            return None
+        Y = np.array([y[m] for m in months])
+        X = np.column_stack([np.ones(len(months)),
+                             [y2[m] for m in months], [cpi[m] for m in months]])
+        beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
+        resid = Y - X @ beta
+        r2 = 1 - (resid ** 2).sum() / ((Y - Y.mean()) ** 2).sum()
+        resid_bp = float(resid.std() * 100)
+        _, two_y = await _fred_last(session, "DGS2")
+        core = sorted(cpi.items())[-1][1]
+        if two_y is None:
+            return None
+        fair = float(beta[0] + beta[1] * two_y + beta[2] * core)
+        _, real = await _fred_last(session, "DFII10")       # 10Y TIPS real yield
+        _, be = await _fred_last(session, "T10YIE")         # 10Y breakeven inflation
+        return {
+            "fair": round(fair, 2),
+            "gap_bp": round((last10y - fair) * 100),
+            "r2": round(float(r2), 2),
+            "err_bp": round(resid_bp),
+            "two_y": round(two_y, 2),
+            "core_cpi": round(core, 1),
+            "real": round(real, 2) if real is not None else None,
+            "breakeven": round(be, 2) if be is not None else None,
+        }
+    except Exception:
+        return None
+
+
+# ---- forecast journal: log daily, grade, auto-recalibrate ----------------
+# The journal is the terminal's own track record and the "memory it learns from".
+# One entry per session: the band we'd have drawn that day (from data up to that
+# day only) and, once the future prints, the realized move as a z-score. A backtest
+# seeds ~90 sessions so it's useful immediately; live sessions append over time.
+# Calibration rescales band width so realized vol matches forecast vol (RMS of z),
+# i.e. the bands self-correct toward honest coverage. Local dotfile; never pushed.
+_FC_LOG = HERE / ".forecast_log.json"
+_FC_LAM = 0.94
+_FC_Z50, _FC_Z90 = 0.6745, 1.6449
+
+
+def _fc_load():
+    try:
+        d = json.loads(_FC_LOG.read_text())
+        if isinstance(d, dict) and "entries" in d:
+            return d
+    except Exception:
+        pass
+    return {"version": 1, "entries": [], "calib": {}}
+
+
+def _fc_save(log):
+    try:
+        _FC_LOG.write_text(json.dumps(log))
+        try:
+            os.chmod(_FC_LOG, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _ewma_var_series(chg, lam=_FC_LAM, seed=20):
+    """Running EWMA variance. out[k] uses chg[0..k] — the variance known standing at
+    the close that completed chg[k], i.e. the volatility forecast for chg[k+1]."""
+    import statistics
+    out = []
+    if not chg:
+        return out
+    var = (statistics.pvariance(chg[:seed]) if len(chg) >= seed
+           else statistics.pvariance(chg) if len(chg) > 1 else chg[0] * chg[0])
+    for x in chg:
+        var = lam * var + (1 - lam) * x * x
+        out.append(var)
+    return out
+
+
+def _fc_calib(entries, window=90, min_n=40):
+    """Learn one width multiplier per horizon so the 90% band actually covers ~90% of
+    realized moves: mult = p90(|z|)/z90, half-stepped toward 1 so a small/noisy sample
+    doesn't overfit, and clamped. Report coverage before and after so the learning shows."""
+    ad = [abs(e["z_day"]) for e in entries if "z_day" in e][-window:]
+    aw = [abs(e["z_week"]) for e in entries if "z_week" in e][-window:]
+
+    def pct(xs, p):
+        s = sorted(xs)
+        k = (len(s) - 1) * p
+        f = int(k)
+        c = min(f + 1, len(s) - 1)
+        return s[f] + (s[c] - s[f]) * (k - f)
+
+    def mult(a):
+        if len(a) < min_n:
+            return 1.0
+        raw = pct(a, 0.90) / _FC_Z90
+        return max(0.7, min(1.6, 1 + 0.5 * (raw - 1)))      # half-step damping
+
+    def cov(a, zc, m):
+        return round(100 * sum(1 for x in a if x <= zc * m) / len(a)) if a else None
+
+    md, mw = mult(ad), mult(aw)
+
+    # learn how much bigger moves are on a scheduled catalyst day vs a normal one — the honest,
+    # data-driven event bump. Need a handful of each; else None (flag the event, don't size it).
+    import math as _m
+
+    def rms(xs):
+        return _m.sqrt(sum(x * x for x in xs) / len(xs)) if xs else None
+
+    def evmult(zkey, flag, win=180, min_ev=6):
+        ev = [abs(e[zkey]) for e in entries if zkey in e and e.get(flag)][-win:]
+        non = [abs(e[zkey]) for e in entries if zkey in e and not e.get(flag)][-win:]
+        if len(ev) < min_ev or len(non) < min_ev:
+            return None, len(ev)
+        r = rms(ev) / rms(non) if rms(non) else None
+        return (max(1.0, min(1.8, round(r, 3))) if r else None), len(ev)
+
+    evd, evd_n = evmult("z_day", "ev_day")
+    evw, evw_n = evmult("z_week", "ev_week")
+    # point-forecast accuracy: the committed number is no-change (today's level), so its miss IS
+    # the realized move. Report the average miss (MAE) and the typical worst (RMSE) in bp.
+    rd = [abs(e["day_real_bp"]) for e in entries if "day_real_bp" in e][-window:]
+    rw = [abs(e["week_real_bp"]) for e in entries if "week_real_bp" in e][-window:]
+    mae_day = round(sum(rd) / len(rd), 1) if rd else None
+    mae_week = round(sum(rw) / len(rw), 1) if rw else None
+    rmse_day = round((sum(x * x for x in rd) / len(rd)) ** 0.5, 1) if rd else None
+    rmse_week = round((sum(x * x for x in rw) / len(rw)) ** 0.5, 1) if rw else None
+    return {
+        "mult_day": round(md, 3), "mult_week": round(mw, 3),
+        "n_day": len(ad), "n_week": len(aw),
+        "cov50": cov(ad, _FC_Z50, md), "cov90": cov(ad, _FC_Z90, md),
+        "raw_cov50": cov(ad, _FC_Z50, 1.0), "raw_cov90": cov(ad, _FC_Z90, 1.0),
+        "ev_mult_day": evd, "ev_mult_week": evw, "ev_n_day": evd_n, "ev_n_week": evw_n,
+        "mae_day": mae_day, "mae_week": mae_week, "rmse_day": rmse_day, "rmse_week": rmse_week,
+    }
+
+
+# scheduled macro catalysts that move rates, all FRED-dated so we get full history + the
+# next scheduled date for free. (FOMC isn't a FRED release; it's caught forward via ForexFactory.)
+_FC_EVENT_RELEASES = [(10, "CPI"), (50, "Jobs report"), (54, "PCE"), (46, "PPI"),
+                      (9, "Retail sales"), (53, "GDP")]
+_FC_EV_CACHE = {"t": 0.0, "info": None}
+
+
+async def _fc_events(session):
+    """{dates:set, names:{date:[labels]}, next:{date,names}} for scheduled macro catalysts.
+    Cached ~6h. Used both to tag history (learn the event vol) and to look ahead."""
+    import time as _t
+    if _FC_EV_CACHE["info"] and _t.time() - _FC_EV_CACHE["t"] < 6 * 3600:
+        return _FC_EV_CACHE["info"]
+    key = td._fred_key()
+    info = {"dates": set(), "names": {}, "next": None}
+    if not key:
+        return info
+
+    async def one(rid, label):
+        params = {"release_id": rid, "api_key": key, "file_type": "json",
+                  "sort_order": "desc", "limit": 200, "include_release_dates_with_no_data": "true"}
+        try:
+            async with session.get(FRED_RELEASE_DATES, params=params,
+                                   timeout=aiohttp.ClientTimeout(total=12)) as r:
+                d = await r.json(content_type=None)
+        except Exception:
+            return []
+        return [(x["date"], label) for x in d.get("release_dates", [])]
+
+    for lst in await asyncio.gather(*[one(rid, lbl) for rid, lbl in _FC_EVENT_RELEASES]):
+        for dt, lbl in lst:
+            info["dates"].add(dt)
+            info["names"].setdefault(dt, [])
+            if lbl not in info["names"][dt]:
+                info["names"][dt].append(lbl)
+    today = datetime.now().date().isoformat()
+    future = sorted(d for d in info["dates"] if d >= today)
+    if future:
+        info["next"] = {"date": future[0], "names": info["names"][future[0]]}
+    _FC_EV_CACHE.update(t=_t.time(), info=info)
+    return info
+
+
+async def _fc_live_tail(session, after_date):
+    """CNBC carries the live 10Y cash yield; FRED's DGS10 lags ~1 business day. Return CNBC's
+    daily closes NEWER than FRED's last date so the current level / last move / band center are
+    fresh, while FRED stays the backbone for the longer history and vol."""
+    try:
+        cb = await td.fetch_history(session, "US10Y", "1Y")
+    except Exception:
+        return []
+    return [{"t": b["t"], "c": b["c"]} for b in cb
+            if b.get("c") is not None and b["t"] > after_date]
+
+
+def _next_sessions(asof, k=5):
+    """The next k business days (Mon-Fri) strictly after the date string asof."""
+    y, m, dd = (int(x) for x in asof.split("-"))
+    d = datetime(y, m, dd)
+    out = []
+    while len(out) < k:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(d.strftime("%Y-%m-%d"))
+    return out
+
+
+def _fc_sync(bars, event_dates=None):
+    """Append new session snapshots, grade matured ones, recompute calibration. Returns the
+    updated log. Deterministic: snapshots use only data available up to that session."""
+    import math
+    event_dates = event_dates or set()
+    log = _fc_load()
+    entries = log["entries"]
+    have = {e["date"] for e in entries}
+    dates = [b["t"] for b in bars]
+    closes = [b["c"] for b in bars]
+    idx = {d: k for k, d in enumerate(dates)}
+    chg = [(closes[i] - closes[i - 1]) * 100.0 for i in range(1, len(closes))]
+    v = _ewma_var_series(chg)                 # v[k] forecasts chg[k+1]
+    seed = not entries
+    start_j = max(31, len(dates) - (95 if seed else 4))
+    for j in range(start_j, len(dates)):
+        d = dates[j]
+        if d in have or j - 1 < 0 or j - 1 >= len(v) or v[j - 1] <= 0:
+            continue
+        entries.append({"date": d, "level": round(closes[j], 2),
+                        "sd1": round(math.sqrt(v[j - 1]), 4),
+                        "src": "backtest" if seed else "live"})
+        have.add(d)
+    entries.sort(key=lambda e: e["date"])
+    for e in entries:                          # grade anything whose future has printed
+        j = idx.get(e["date"])
+        if j is None or e.get("sd1", 0) <= 0:
+            continue
+        if "z_day" not in e and j + 1 <= len(dates) - 1:
+            dr = (closes[j + 1] - closes[j]) * 100.0
+            e["day_real_bp"], e["next_date"], e["z_day"] = round(dr, 1), dates[j + 1], round(dr / e["sd1"], 3)
+        if "z_week" not in e and j + 5 <= len(dates) - 1:
+            wr = (closes[j + 5] - closes[j]) * 100.0
+            e["week_real_bp"], e["z_week"] = round(wr, 1), round(wr / (e["sd1"] * math.sqrt(5)), 3)
+        # tag: did the predicted session (next day) land on a scheduled catalyst? did the week contain one?
+        if event_dates:
+            if e.get("next_date"):
+                e["ev_day"] = 1 if e["next_date"] in event_dates else 0
+            e["ev_week"] = 1 if any(s in event_dates for s in _next_sessions(e["date"], 5)) else 0
+    log["calib"] = _fc_calib(entries)
+    _fc_save(log)
+    return log
+
+
+async def _fc_gemini_note(session, log, data):
+    """One short plain-English journal line per new session, written by Gemini and stored in
+    the log. Grounded strictly in the numbers we pass; told not to invent causes. Best-effort."""
+    entries = log["entries"]
+    if not entries:
+        return None
+    latest = entries[-1]
+    if latest.get("note"):
+        return latest["note"]
+    key = _gemini_key()
+    if not key:
+        return None
+    c = log.get("calib", {})
+    graded = latest.get("z_day")
+    surprise = data.get("tail") or abs(data.get("last_sig", 0)) >= 1.5
+    # on a surprise move, pull real rates headlines so Gemini can attribute the WHY (not guess it)
+    heads = ""
+    if surprise:
+        try:
+            items = await td._gnews(session,
+                                    "Treasury yields OR bond market OR Federal Reserve OR inflation when:3d", 6)
+            heads = "\n".join("  - " + (it.get("title") or "")[:140] for it in (items or [])[:6])
+        except Exception:
+            heads = ""
+    nxt = data.get("next_catalyst")
+    prompt = (
+        "You are the journal keeper for a US 10-year Treasury yield forecasting tool. Write ONE or TWO "
+        "plain, factual sentences (max 45 words) for a reader. State the latest result, and — ONLY if a "
+        "surprise move is shown AND headlines are given below — attribute the likely cause to a specific "
+        "headline. Never invent a cause that is not in the headlines; if none fit, say the driver is unclear.\n"
+        f"- As of {data['asof']}, 10Y at {data['level']}%. Last session moved {data['last_chg_bp']}bp "
+        f"({data['last_sig']} sigma){' — a surprise, outside the normal range' if surprise else ''}.\n"
+        f"- The model's 90% band for the next session is {data['day']['lo90']}-{data['day']['hi90']}%.\n"
+        + (f"- Grading the prior forecast: realized day move {latest.get('day_real_bp')}bp, z={graded} "
+           f"({'inside' if abs(graded) <= _FC_Z90 else 'OUTSIDE'} the 90% band).\n" if graded is not None else "")
+        + (f"- Track record: 90% band covered {c.get('cov90')}% of the last {c.get('n_day')} sessions "
+           f"(target 90%); width x{c.get('mult_day')} after calibration.\n" if c.get('cov90') is not None else "")
+        + (f"- Heads up: next scheduled catalyst is {nxt['name']} on {nxt['when']}.\n" if nxt else "")
+        + (f"- Recent rates headlines (for attribution ONLY):\n{heads}\n" if heads else "")
+        + "Write only the sentence(s), no preamble."
+    )
+    try:
+        text, _err = await _gemini_generate(session, key, prompt, 140, ("gemini-2.5-flash-lite", "gemini-2.5-flash"))
+        if text:
+            latest["note"] = text.strip()
+            _fc_save(log)
+            return latest["note"]
+    except Exception:
+        pass
+    return None
+
+
+def _fc_ai_view(ai, bars):
+    """Grade every matured AI forecast against the realized close and return the latest call
+    plus its running accuracy vs the no-change baseline. Honest: AI can't be backtested (no clean
+    historical news), so this builds live from the day it's turned on."""
+    if not ai:
+        return None
+    dates = [b["t"] for b in bars]
+    closes = {b["t"]: b["c"] for b in bars}
+    idx = {d: i for i, d in enumerate(dates)}
+    aed, bed, aew, bew, hits, dirn = [], [], [], [], 0, 0
+    last = None
+    for ad in sorted(ai):
+        rec = ai[ad]
+        j = idx.get(ad)
+        base = rec.get("base")
+        if j is None:
+            continue
+        if rec.get("monday") is not None and j + 1 <= len(dates) - 1:
+            real = closes[dates[j + 1]]
+            aed.append(abs(rec["monday"] - real) * 100)
+            dr = None
+            if base is not None:
+                bed.append(abs(base - real) * 100)
+                if rec.get("lean") in ("up", "down"):   # direction scored only when it leaned
+                    dirn += 1
+                    moved = real - base
+                    dr = (rec["lean"] == "up" and moved > 0) or (rec["lean"] == "down" and moved < 0)
+                    if dr:
+                        hits += 1
+            last = {"date": ad, "pred": rec["monday"], "actual": round(real, 2),
+                    "err_bp": round(abs(rec["monday"] - real) * 100, 1),
+                    "base_err_bp": round(abs(base - real) * 100, 1) if base is not None else None,
+                    "dir_right": dr, "lean": rec.get("lean"), "review": rec.get("review")}
+        if rec.get("week") is not None and j + 5 <= len(dates) - 1:
+            real = closes[dates[j + 5]]
+            aew.append(abs(rec["week"] - real) * 100)
+            if base is not None:
+                bew.append(abs(base - real) * 100)
+    L = ai[sorted(ai)[-1]]
+
+    def mae(x):
+        return round(sum(x) / len(x), 1) if x else None
+
+    return {
+        "monday": L.get("monday"), "week": L.get("week"), "lean": L.get("lean"),
+        "conf": L.get("conf"), "why": L.get("why"), "date": sorted(ai)[-1],
+        "n_day": len(aed), "n_week": len(aew),
+        "ai_mae_day": mae(aed), "base_mae_day": mae(bed),
+        "ai_mae_week": mae(aew), "base_mae_week": mae(bew),
+        "dir_n": dirn, "dir_hit": hits, "last": last,
+    }
+
+
+async def _fc_ai_forecast(session, data, log, bars):
+    """Experimental AI contextual forecast. Gemini reads live rates/Fed/fiscal/political headlines
+    and reasons about the Fed (decision + chair's communication style), the Treasury Secretary and
+    his team (issuance/supply posture), other influential policymakers, and the fiscal/political
+    backdrop to commit to a Monday and weekly 10Y number, bullish or bearish on Treasuries. Stored
+    once per session and scored over time, head-to-head vs no-change. NOT a proven edge."""
+    key = _gemini_key()
+    if not key:
+        return None
+    ai = log.setdefault("ai", {})
+    asof = data["asof"]
+    if not (ai.get(asof) and ai[asof].get("monday") is not None):   # one generation per session
+        heads = []
+        for q in ("Federal Reserve OR Fed chair OR FOMC OR interest rate decision when:6d",
+                  "Treasury Secretary OR Treasury issuance OR bond market OR fiscal deficit OR "
+                  "government shutdown OR Treasury supply when:6d"):
+            try:
+                items = await td._gnews(session, q, 7)
+                heads += [(it.get("title") or "")[:150] for it in (items or [])[:7]]
+            except Exception:
+                pass
+        heads = [h for h in dict.fromkeys(h for h in heads if h)][:14]
+        headblock = "\n".join("  - " + h for h in heads) or "  (no fresh headlines)"
+        # FEEDBACK LOOP: feed the AI its own track record + the lessons from past misses, so each
+        # forecast is informed by what went wrong before. The scorecard shows if this truly helps.
+        prior = _fc_ai_view(ai, bars) if ai else None
+        lessons = []
+        for ad in sorted(ai, reverse=True):
+            rv = ai[ad].get("review")
+            if rv:
+                lessons.append(f"  - ({ad}) {rv}")
+            if len(lessons) >= 5:
+                break
+        learnblock = ""
+        if prior and prior.get("n_day"):
+            learnblock += (f"YOUR TRACK RECORD: avg miss ±{prior['ai_mae_day']}bp vs the no-change "
+                           f"baseline's ±{prior['base_mae_day']}bp over {prior['n_day']} calls; "
+                           f"direction {prior['dir_hit']}/{prior['dir_n']} right. ")
+            if (prior.get("ai_mae_day") and prior.get("base_mae_day")
+                    and prior["ai_mae_day"] > prior["base_mae_day"]):
+                learnblock += ("You have been LESS accurate than just saying 'unchanged' — so lean "
+                               "closer to unchanged unless a driver is genuinely strong. ")
+        if lessons:
+            learnblock += "LESSONS FROM YOUR PAST MISSES (apply them now):\n" + "\n".join(lessons) + "\n"
+        lvl, dsd, wsd = data["level"], data["day"]["sd_bp"], data["week"]["sd_bp"]
+        f = data.get("fund") or {}
+        nxt = data.get("next_catalyst")
+        path = " ".join(f"{b['c']:.2f}" for b in bars[-6:])
+        prompt = (
+            "You are a US rates strategist making an HONEST, falsifiable 10-year Treasury yield "
+            "forecast. Reason explicitly about what makes the market bullish on Treasuries (yields "
+            "DOWN) vs bearish (yields UP): the Fed's current stance and the chair's communication "
+            "tendencies; the Treasury Secretary and his team's issuance/supply posture and "
+            "characteristics; other influential policymakers; the fiscal and political backdrop; "
+            "and the headlines below. Markets price public news fast, so if there is no clear edge, "
+            "stay near unchanged — do NOT manufacture conviction.\n\n"
+            f"Current 10Y: {lvl:.2f}%. Last 6 closes: {path}. Typical 1-session move ~{dsd}bp, "
+            f"1-week ~{wsd}bp — keep your numbers within about 2x of those.\n"
+            f"Fundamental fair value ~{f.get('fair', '?')}% (gap {f.get('gap_bp', '?')}bp vs now).\n"
+            + (f"Next scheduled data: {nxt['name']} on {nxt['when']}.\n" if nxt else "")
+            + f"Live headlines:\n{headblock}\n\n"
+            + (learnblock + "\n" if learnblock else "")
+            + "Respond in EXACTLY this format and nothing else:\n"
+            "MONDAY: <yield % for the next session close>\n"
+            "WEEK: <yield % for the close ~5 sessions out>\n"
+            "LEAN: <up|down|flat>\n"
+            "CONF: <low|medium|high>\n"
+            "WHY: <1-2 sentences naming the specific driver(s) and who/what is behind them>"
+        )
+        try:
+            text, _e = await _gemini_generate(session, key, prompt, 450,
+                                               ("gemini-2.5-flash", "gemini-2.5-flash-lite"))
+        except Exception:
+            text = None
+        if text:
+            import re as _re
+
+            def grab(lbl):
+                m = _re.search(lbl + r"\s*:\s*(.+)", text, _re.IGNORECASE)
+                return m.group(1).strip() if m else ""
+
+            def num(s):
+                m = _re.search(r"-?\d+(?:\.\d+)?", s or "")
+                return float(m.group(0)) if m else None
+
+            def clamp(x, sd):
+                if x is None:
+                    return None
+                return round(min(lvl + 3 * sd / 100, max(lvl - 3 * sd / 100, x)), 2)
+
+            mon, wk = clamp(num(grab("MONDAY")), dsd), clamp(num(grab("WEEK")), wsd)
+            if mon is not None or wk is not None:
+                ai[asof] = {"monday": mon, "week": wk, "lean": grab("LEAN").lower()[:5],
+                            "conf": grab("CONF").lower()[:8], "why": grab("WHY")[:400],
+                            "base": lvl}
+                _fc_save(log)
+    await _fc_ai_review(session, ai, bars, log)     # post-mortem on the most recent matured call
+    return _fc_ai_view(ai, bars)
+
+
+async def _fc_ai_review(session, ai, bars, log):
+    """When an AI call has matured, write ONE post-mortem: predicted vs actual, and what moved it
+    that the forecast under/over-weighted — the 'learn what was wrong and why' step. Bounded to the
+    single most recent unreviewed call per run."""
+    key = _gemini_key()
+    if not key:
+        return
+    dates = [b["t"] for b in bars]
+    closes = {b["t"]: b["c"] for b in bars}
+    idx = {d: i for i, d in enumerate(dates)}
+    target = None
+    for ad in sorted(ai, reverse=True):
+        rec = ai[ad]
+        j = idx.get(ad)
+        if (rec.get("monday") is not None and not rec.get("review")
+                and j is not None and j + 1 <= len(dates) - 1):
+            target = ad
+            break
+    if not target:
+        return
+    rec = ai[target]
+    real = closes[dates[idx[target] + 1]]
+    err = round((rec["monday"] - real) * 100, 1)
+    base_err = round(abs(rec.get("base", real) - real) * 100, 1)
+    heads = ""
+    try:
+        items = await td._gnews(session,
+                                "Treasury yields OR Federal Reserve OR bond market OR fiscal when:4d", 6)
+        heads = "\n".join("  - " + (it.get("title") or "")[:140] for it in (items or [])[:6])
+    except Exception:
+        heads = ""
+    prompt = (
+        "You are reviewing a past 10-year Treasury yield forecast, honestly. In ONE or TWO sentences "
+        "(max 40 words): say how close it was, and what actually moved the yield that the forecast "
+        "under- or over-weighted. Use only the headlines; if unclear, say the driver is unclear. "
+        "End with a short lesson for next time.\n"
+        f"- Forecast (made {target}): next close {rec['monday']}%, lean {rec.get('lean')}. "
+        f"Its reasoning was: {rec.get('why', '')}\n"
+        f"- Actual next close: {round(real, 2)}% (off by {abs(err)}bp; the no-change baseline was "
+        f"off by {base_err}bp).\n"
+        + (f"- Headlines around then:\n{heads}\n" if heads else "")
+        + "Write only the review."
+    )
+    try:
+        text, _e = await _gemini_generate(session, key, prompt, 160,
+                                           ("gemini-2.5-flash-lite", "gemini-2.5-flash"))
+        if text:
+            rec["review"] = text.strip()
+            _fc_save(log)
+    except Exception:
+        pass
+
+
+async def api_forecast(request):
+    import time as _time, math
+    if not _forecast_ready():
+        return web.json_response({"ok": False, "error": "unavailable"}, status=404)
+    now = _time.time()
+    if _FORECAST_CACHE["data"] and (now - _FORECAST_CACHE["t"] < 600):
+        return web.json_response(_FORECAST_CACHE["data"])
+    session = request.app["session"]
+    start = (datetime.now() - timedelta(days=1100)).strftime("%Y-%m-%d")   # ~3y: enough to backtest
+    end = datetime.now().strftime("%Y-%m-%d")
+    try:
+        bars = await td._fred_hist(session, "DGS10", "1Y", custom=(start, end))
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)[:160]}, status=502)
+    if len(bars) < 60:
+        return web.json_response({"ok": False, "error": "no 10Y data (FRED key set?)"}, status=503)
+    # append CNBC's fresher sessions so "now" isn't a day stale (FRED's DGS10 lags ~1 day)
+    tail = await _fc_live_tail(session, bars[-1]["t"])
+    if tail:
+        bars = bars + tail
+    # daily changes in basis points (yields are in %, so x100)
+    chg = [(bars[i]["c"] - bars[i - 1]["c"]) * 100.0 for i in range(1, len(bars))]
+    v = _ewma_var_series(chg)
+    sd1_base = math.sqrt(v[-1]) if v and v[-1] > 0 else 0.0     # forecast made at the last close
+    last = bars[-1]["c"]
+    last_chg = chg[-1]
+    sd_before = math.sqrt(v[-2]) if len(v) >= 2 and v[-2] > 0 else sd1_base  # vol BEFORE the last move
+    last_sig = (last_chg / sd_before) if sd_before else 0.0
+
+    # scheduled catalysts: tag history (learn the event vol), then look ahead for the next window
+    ev = await _fc_events(session)
+    log = _fc_sync(bars, ev.get("dates"))
+    cal = log.get("calib", {})
+    md = cal.get("mult_day", 1.0) or 1.0
+    mw = cal.get("mult_week", 1.0) or 1.0
+
+    def band(sig):
+        p_over10 = round(2 * (1 - _norm_cdf(10.0 / sig)) * 100) if sig else 0
+        return {
+            "sd_bp": round(sig, 1),
+            "lo50": round(last - _FC_Z50 * sig / 100, 2), "hi50": round(last + _FC_Z50 * sig / 100, 2),
+            "lo90": round(last - _FC_Z90 * sig / 100, 2), "hi90": round(last + _FC_Z90 * sig / 100, 2),
+            "band90_bp": round(2 * _FC_Z90 * sig),
+            "usd90": round(2 * _FC_Z90 * sig * ZN_DV01),
+            "p_over10": p_over10,
+        }
+
+    # does a scheduled catalyst fall in the next session / next week? widen if we've learned by how much
+    ns = _next_sessions(bars[-1]["t"], 5)
+    names, nextd = ev.get("names", {}), ev.get("next")
+
+    def _when(dstr):
+        try:
+            dt = datetime(*(int(x) for x in dstr.split("-")))
+            return dt.strftime("%a %-m/%-d")
+        except Exception:
+            return dstr
+
+    evd_mult = cal.get("ev_mult_day")
+    evw_mult = cal.get("ev_mult_week")
+    day_cat = ({"name": ", ".join(names.get(ns[0], [])), "when": _when(ns[0])} if names.get(ns[0]) else None)
+    wk_hit = next((s for s in ns if names.get(s)), None)
+    wk_cat = ({"name": ", ".join(names.get(wk_hit, [])), "when": _when(wk_hit)} if wk_hit else None)
+    try:
+        next_label = datetime(*(int(x) for x in ns[0].split("-"))).strftime("%A").upper()
+    except Exception:
+        next_label = "NEXT SESSION"
+
+    day_sd = sd1_base * md * (evd_mult if (day_cat and evd_mult) else 1.0)
+    week_sd = sd1_base * math.sqrt(5) * mw * (evw_mult if (wk_cat and evw_mult) else 1.0)
+    # recent graded day-results for a mini journal (newest first), scored at current calibration
+    recent = []
+    for e in reversed([x for x in log["entries"] if "z_day" in x]):
+        z = e["z_day"]
+        recent.append({"date": e["date"], "real_bp": e.get("day_real_bp"),
+                       "in90": abs(z) <= _FC_Z90 * md, "in50": abs(z) <= _FC_Z50 * md,
+                       "src": e.get("src", "live")})
+        if len(recent) >= 12:
+            break
+
+    day_band = band(day_sd)
+    week_band = band(week_sd)
+    if day_cat:
+        day_band["catalyst"], day_band["ev_mult"] = day_cat, (evd_mult or 0)
+    if wk_cat:
+        week_band["catalyst"], week_band["ev_mult"] = wk_cat, (evw_mult or 0)
+
+    data = {
+        "ok": True, "asof": bars[-1]["t"], "level": round(last, 2),
+        "last_chg_bp": round(last_chg, 1), "last_sig": round(last_sig, 1),
+        "tail": abs(last_sig) >= 2.0,
+        "day": day_band, "week": week_band,
+        "zn_dv01": ZN_DV01,
+        "fund": await _forecast_fundamental(session, last),
+        "score": {
+            "cov50": cal.get("cov50"), "cov90": cal.get("cov90"),
+            "raw_cov50": cal.get("raw_cov50"), "raw_cov90": cal.get("raw_cov90"),
+            "n": cal.get("n_day", 0), "mult_day": round(md, 2), "mult_week": round(mw, 2),
+            "learning": cal.get("n_day", 0) < 40,
+            "ev_mult_day": evd_mult, "ev_n_day": cal.get("ev_n_day", 0),
+            "mae_day": cal.get("mae_day"), "mae_week": cal.get("mae_week"),
+            "rmse_day": cal.get("rmse_day"), "rmse_week": cal.get("rmse_week"),
+        },
+        "next_label": next_label,
+        "next_catalyst": ({"name": ", ".join(nextd["names"]), "when": _when(nextd["date"]),
+                           "date": nextd["date"]} if nextd else None),
+        "recent": recent,
+    }
+    data["note"] = await _fc_gemini_note(session, log, data)
+    data["ai"] = await _fc_ai_forecast(session, data, log, bars)
+    _FORECAST_CACHE.update(t=now, data=data)
+    return web.json_response(data)
+
+
 # ---- symbol search: company name -> ticker suggestions -------------------
 # SEC's company_tickers.json covers ~10k US-listed stocks (name -> ticker). We
 # add the ETFs / indices / crypto the terminal supports but SEC doesn't list.
@@ -2995,14 +3683,15 @@ async def index(request):
     app_name = app_name or "K Terminal"
     cfg = ("<script>window.NO_PORT=%s;window.LOCAL_TOOLS=%s;window.SHARE_TO=%s;"
            "window.NATIVE_PDF=%s;window.APP_VERSION=%s;window.OPTIONS_READY=%s;"
-           "window.MAIL_READY=%s;</script>") % (
+           "window.MAIL_READY=%s;window.FORECAST_READY=%s;</script>") % (
         "true" if os.environ.get("MKT_NO_PORT") else "false",
         "true" if local_tools else "false",
         json.dumps(share_to),
         "true" if native_pdf else "false",
         json.dumps(app_version),
         "true" if (smd and smd.is_configured()) else "false",   # Schwab options wired up here?
-        "true" if (mail and mail.is_configured()) else "false")  # M365 mailbox linked yet?
+        "true" if (mail and mail.is_configured()) else "false",  # M365 mailbox linked yet?
+        "true" if _forecast_ready() else "false")   # local 10Y/ZN research project present? (Mac only)
     # security: on the gated cloud app, log every authenticated open under a stable
     # per-device cookie (name if known, else "unknown") with its browser + IP, so each
     # physical device shows up separately and any device that isn't Robert/Ezra stands out
@@ -3178,6 +3867,7 @@ def make_app():
     app.router.add_post("/api/mail/forward", api_mail_forward)
     app.router.add_post("/api/mail/read", api_mail_read)
     app.router.add_get("/api/mail/unread", api_mail_unread)
+    app.router.add_get("/api/forecast", api_forecast)
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)
     app.router.add_get("/api/news_board", api_news_board)

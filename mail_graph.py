@@ -308,6 +308,38 @@ async def list_messages(session, folder="inbox", top=25):
     return out
 
 
+async def _inline_remote_images(session, html_body, limit=15, max_bytes=4_000_000):
+    """Fetch external http(s) <img> sources and inline them as data: URIs, so they render in the
+    sandboxed reading pane (which often can't load remote images: null origin, anti-hotlink rules,
+    remote-image blocking). SECURITY: never sends the mailbox token — auth is added per-request in
+    _get(), so this bare session.get() with a UA-only header is unauthenticated."""
+    import base64 as _b64
+    srcs = []
+    for u in re.findall(r'<img[^>]+?src\s*=\s*["\']?(https?://[^"\'>\s]+)', html_body, flags=re.IGNORECASE):
+        if u not in srcs:
+            srcs.append(u)
+
+    async def fetch(u):
+        try:
+            async with session.get(u, headers=UA, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status != 200:
+                    return u, None
+                ct = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if not ct.startswith("image/"):
+                    return u, None
+                data = await r.read()
+            if not data or len(data) > max_bytes:
+                return u, None
+            return u, f"data:{ct};base64,{_b64.b64encode(data).decode()}"
+        except Exception:
+            return u, None
+
+    for u, uri in await asyncio.gather(*[fetch(x) for x in srcs[:limit]]):
+        if uri:
+            html_body = html_body.replace(u, uri)
+    return html_body
+
+
 async def get_message(session, msg_id):
     """One full message: recipients + HTML/text body + file-attachment list (metadata only)."""
     params = {"$select": "subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments"}
@@ -365,6 +397,12 @@ async def get_message(session, msg_id):
             import html as _h
             body_html = "<div style='white-space:pre-wrap;font-family:sans-serif'>" + _h.escape(body_html) + "</div>" + imgs
             body_type = "html"
+    # external http(s) images (not cid, not attachments) -> inline them too, so remote images render
+    if body_type == "html" and ("http://" in body_html or "https://" in body_html):
+        try:
+            body_html = await _inline_remote_images(session, body_html)
+        except Exception:
+            pass
     return {
         "id": m.get("id"),
         "subject": m.get("subject") or "(no subject)",

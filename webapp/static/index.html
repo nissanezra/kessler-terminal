@@ -472,6 +472,66 @@
     .splash-name{font-size:30px;white-space:normal;} .splash-tag{font-size:18px;}
     .splash-greeting{font-size:19px;}
   }
+  /* ---------------- FORECAST (10Y band) ---------------- */
+  #fc-body{max-width:1160px;font-family:var(--mono);}
+  .fc-now{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:10px 0 4px;}
+  .fc-now .fc-lvl{color:var(--amber);font-size:30px;font-weight:700;letter-spacing:.01em;}
+  .fc-now .fc-lbl{color:var(--dim);font-size:12px;}
+  .fc-now .fc-mv{font-size:14px;font-weight:700;}
+  .fc-now .fc-mv.up{color:var(--green);} .fc-now .fc-mv.down{color:var(--red);}
+  .fc-tail{color:#000;background:var(--red);font-weight:700;font-size:11px;padding:1px 7px;border-radius:3px;}
+  .fc-cards{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0;}
+  .fc-card{flex:1 1 300px;border:1px solid #4a3a15;border-radius:6px;padding:12px 14px;background:#120d04;}
+  .fc-gap{margin:0 0 4px;font-size:13px;color:var(--dim);}
+  .fc-gapv{font-weight:700;} .fc-gapv.up{color:var(--green);} .fc-gapv.down{color:var(--red);}
+  .fc-pull{font-size:11px;margin-left:4px;} .fc-pull.up{color:var(--green);} .fc-pull.down{color:var(--red);}
+  .fc-card h4{margin:0 0 10px;color:var(--amber);font-size:13px;letter-spacing:.05em;
+    border-bottom:1px solid #3a2e12;padding-bottom:6px;}
+  .fc-point{color:var(--dim);font-size:12px;margin:0 0 2px;}
+  .fc-point b{color:var(--amber);font-size:21px;font-weight:700;}
+  .fc-acc{color:var(--green);font-size:11.5px;margin:0 0 6px;} .fc-acc b{color:var(--green);}
+  .fc-close{color:var(--dim);font-size:12px;margin:0 0 3px;}
+  .fc-close b{color:var(--amber);font-size:15px;} .fc-close .fc-range{color:var(--price);font-weight:700;}
+  .fc-cat{color:var(--yellow);font-size:11.5px;margin:0 0 8px;line-height:1.4;}
+  .fc-cat b{color:var(--yellow);}
+  .fc-nextcat{color:var(--yellow);font-size:12.5px;margin:2px 0 0;} .fc-nextcat b{color:var(--yellow);}
+  .fc-exp{color:var(--dim);font-size:12px;margin:0 0 10px;}
+  .fc-exp b{color:var(--white);font-size:15px;}
+  .fc-track{margin:18px 0 4px;border-top:1px solid #241a09;padding-top:12px;max-width:1160px;}
+  .fc-track-hd{display:flex;align-items:baseline;gap:12px;}
+  .fc-track-hd h4{margin:0;color:var(--amber);font-size:13px;letter-spacing:.05em;}
+  .fc-track-sub{color:var(--dim);font-size:11px;}
+  .fc-trow{display:flex;gap:28px;flex-wrap:wrap;font-size:13px;margin:9px 0 2px;}
+  .fc-trow .k{color:var(--dim);} .fc-trow b{color:var(--white);}
+  .fc-calib{color:var(--dim);font-size:12px;margin:7px 0;line-height:1.5;} .fc-calib b{color:var(--white);}
+  .fc-strip{display:flex;align-items:center;gap:3px;flex-wrap:wrap;margin:9px 0;font-size:12px;}
+  .fc-strip .k{color:var(--dim);margin-right:4px;}
+  .fc-sq{width:13px;height:13px;border-radius:2px;background:var(--green);display:inline-block;}
+  .fc-sq.out{background:var(--red);} .fc-sq.bt{opacity:.5;}
+  .fc-note{color:var(--amber);font-size:12.5px;font-style:italic;margin:10px 0 2px;line-height:1.5;max-width:900px;}
+  .fc-ai{margin:18px 0 4px;border:1px solid #2a3a4a;border-radius:6px;padding:12px 16px;background:#0a1016;max-width:1160px;}
+  .fc-ai .fc-track-hd h4{color:#5ab0ff;}
+  .fc-ai-call{display:flex;gap:22px;align-items:baseline;flex-wrap:wrap;margin:8px 0 4px;}
+  .fc-ai-num{color:var(--dim);font-size:12px;} .fc-ai-num b{color:#8fd0ff;font-size:21px;font-weight:700;margin-left:4px;}
+  .fc-ai-lean{font-size:12px;font-weight:700;padding:1px 8px;border-radius:3px;background:#17202b;}
+  .fc-ai-lean.up{color:var(--green);} .fc-ai-lean.down{color:var(--red);}
+  .fc-ai-why{color:var(--price);font-size:13px;font-style:italic;margin:4px 0 8px;line-height:1.5;max-width:960px;}
+  .fc-ai-acc{color:#8fd0ff;font-size:12.5px;margin:6px 0;} .fc-ai-acc b{color:#cfeaff;}
+  .fc-ai-last{color:var(--dim);font-size:12px;margin:6px 0 2px;} .fc-ai-last b{color:var(--white);}
+  .fc-ai-review{color:var(--yellow);font-size:12px;font-style:italic;margin:2px 0 6px;line-height:1.5;}
+  .fc-ai-note{color:var(--dim);font-size:11px;line-height:1.5;margin:8px 0 0;font-style:italic;max-width:960px;}
+  .fc-vals{margin-top:9px;font-size:13px;}
+  .fc-vals>div{display:flex;justify-content:space-between;padding:2px 0;}
+  .fc-vals .fc-q{color:var(--dim);} .fc-vals .fc-v{color:var(--price);font-weight:700;}
+  .fc-bar{position:relative;height:10px;border-radius:5px;background:#241a09;overflow:hidden;margin:2px 0;}
+  .fc-bar i{position:absolute;top:0;bottom:0;display:block;}
+  .fc-bar .b90{background:#3a2e12;left:0;right:0;}
+  .fc-bar .b50{background:var(--amber);opacity:.55;}
+  .fc-bar .mid{background:var(--white);width:2px;left:50%;transform:translateX(-1px);opacity:.9;}
+  .fc-stat{color:var(--dim);font-size:12px;margin-top:10px;}
+  .fc-stat b{color:var(--white);}
+  .fc-foot{color:var(--dim);font-size:11px;line-height:1.6;margin:8px 0 2px;font-style:italic;
+    border-top:1px solid #241a09;padding-top:9px;max-width:720px;}
   /* ---------------- MESSAGES (M365 mailbox) ---------------- */
   .msg-acct{color:var(--dim);font-size:12px;margin-left:6px;}
   .msg-folders{display:inline-flex;gap:6px;margin-left:12px;}
@@ -616,6 +676,7 @@
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
       <button class="navbtn" onclick="showNews(null)">NEWS</button>
       <button class="navbtn" onclick="showTopBond()">TOP BOND</button>
+      <button class="navbtn" id="nav-forecast" onclick="showForecast()" style="display:none">FORECAST</button>
       <button class="navbtn" onclick="showOptionsNav()">OPTIONS</button>
       <button class="navbtn" onclick="showResearch()">RESEARCH</button>
       <button class="navbtn" onclick="showShared()">SHARED</button>
@@ -743,6 +804,13 @@
       <span class="ctitle" id="nv-title">MARKET NEWS</span></div>
     <div class="nb-sub" id="nv-sub"></div>
     <div class="news" id="nv-news"></div>
+  </div>
+
+  <div id="forecastview" class="view" style="padding:6px 12px;">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" onclick="showForecast(true)">↻ Refresh</button>
+      <span class="ctitle" style="margin-left:auto">10Y FORECAST</span></div>
+    <div id="fc-body"></div>
   </div>
 
   <div id="sharedview" class="view" style="padding:6px 12px;">
@@ -908,6 +976,9 @@ window.addEventListener("resize", fitViews); fitViews();
   if(el&&window.APP_VERSION){const v=String(window.APP_VERSION).trim();
     // show the build number as a dotted version, e.g. 105 -> v1.0.5
     el.textContent="v"+(/^\d+$/.test(v)?v.split("").join("."):v);}})();
+/* FORECAST is an experiment gated to Ezra's Mac — reveal the nav button only there */
+(function(){const b=document.getElementById("nav-forecast");
+  if(b&&window.FORECAST_READY)b.style.display="";})();
 
 /* launch splash: fade out once the monitor first renders (min ~900ms, 6s fallback) */
 const splashStart=Date.now(); let splashDone=false;
@@ -929,6 +1000,183 @@ setTimeout(hideSplash,6000);
 function show(id){document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
   document.getElementById(id).classList.add("active");}
 function showMonitor(){show("monitor");}
+
+
+/* ---------------- FORECAST (10Y calibrated band — experiment, Mac only) ---------------- */
+let fcLoaded=false;
+async function showForecast(force){
+  show("forecastview");
+  const b=document.getElementById("fc-body");
+  if(fcLoaded && !force) return;
+  b.innerHTML="<p class='dim'>Computing the band from the last ~15 months of 10Y moves…</p>";
+  try{
+    const d=await(await fetch("/api/forecast")).json();
+    if(!d.ok){ b.innerHTML="<p class='dim'>Forecast unavailable"+(d.error?" ("+esc(d.error)+")":"")+".</p>"; return; }
+    renderForecast(d); fcLoaded=true;
+  }catch(e){ b.innerHTML="<p class='dim'>Couldn't load the forecast.</p>"; }
+}
+function fcBar(lo50,hi50,lo90,hi90){
+  const span=(hi90-lo90)||1;
+  const l=((lo50-lo90)/span)*100, w=((hi50-lo50)/span)*100;
+  return `<div class="fc-bar"><i class="b90"></i>`
+    +`<i class="b50" style="left:${l.toFixed(1)}%;width:${w.toFixed(1)}%"></i>`
+    +`<i class="mid"></i></div>`;
+}
+function fcCard(title,horizon,g,level,mae){
+  const usd=g.usd90.toLocaleString();
+  const lo1=level-g.sd_bp/100, hi1=level+g.sd_bp/100;
+  let catTail;
+  if(!g.ev_mult){ catTail=` · flagged (still learning how much events move it)`; }
+  else if(g.ev_mult>1.01){ catTail=` · band widened <b>×${g.ev_mult.toFixed(2)}</b> (learned)`; }
+  else { catTail=` · no extra widening — events add little over this horizon (learned)`; }
+  const cat=g.catalyst
+    ? `<p class="fc-cat">⚠ catalyst: <b>${esc(g.catalyst.name)}</b> ${esc(g.catalyst.when||"")}${catTail}</p>`
+    : "";
+  const acc=(mae!=null)
+    ? `<p class="fc-acc">historically lands within <b>±${mae} bp</b> of this on average (track record)</p>` : "";
+  return `<div class="fc-card"><h4>${title}</h4>`
+    +`<p class="fc-point">point forecast <b>${level.toFixed(2)}%</b> `
+      +`<span style="font-size:11px">best single estimate · no-change</span></p>`
+    +acc
+    +`<p class="fc-close">1σ ± ${g.sd_bp} bp <span class="fc-range">→ ${lo1.toFixed(2)}–${hi1.toFixed(2)}%</span> `
+      +`<span style="font-size:11px">(${horizon})</span></p>`
+    +cat
+    +fcBar(g.lo50,g.hi50,g.lo90,g.hi90)
+    +`<div class="fc-vals">`
+      +`<div><span class="fc-q">50% band</span><span class="fc-v">${g.lo50.toFixed(2)} – ${g.hi50.toFixed(2)}%</span></div>`
+      +`<div><span class="fc-q">90% band</span><span class="fc-v">${g.lo90.toFixed(2)} – ${g.hi90.toFixed(2)}%</span></div>`
+    +`</div>`
+    +`<p class="fc-stat">90% range ≈ <b>${g.band90_bp} bp</b> ≈ <b>$${usd}</b> on 1 /ZN · chance of a &gt;10bp move <b>${g.p_over10}%</b></p>`
+    +`</div>`;
+}
+function fcFundCard(f){
+  if(!f) return "";
+  const gap=f.gap_bp, near=Math.abs(gap)<=Math.max(10,Math.round(f.err_bp*0.33));
+  const word=near?"≈ fair value":(gap>0?"cheap":"rich");
+  // bond convention (matches the move coloring above): falling yield = "down"/red
+  const cls=near?"":(gap>0?"down":"up");
+  const pull=near?"":(gap>0?"▼ pulls lower":"▲ pulls higher");
+  const dec=(f.real!=null&&f.breakeven!=null)
+    ? `<div><span class="fc-q">make-up</span><span class="fc-v">real ${f.real.toFixed(2)} + infl exp ${f.breakeven.toFixed(2)}</span></div>` : "";
+  return `<div class="fc-card"><h4>FUNDAMENTAL</h4>`
+    +`<p class="fc-exp">fair value <b>${f.fair.toFixed(2)}%</b> <span style="font-size:11px">(2Y path + core inflation)</span></p>`
+    +`<p class="fc-gap">current vs fair <span class="fc-gapv ${cls}">${gap>0?"+":""}${gap} bp · ${word}</span>`
+      +(pull?`<span class="fc-pull ${cls}">${pull}</span>`:"")+`</p>`
+    +`<div class="fc-vals">`
+      +`<div><span class="fc-q">drivers</span><span class="fc-v">2Y ${f.two_y.toFixed(2)}% · core CPI ${f.core_cpi.toFixed(1)}%</span></div>`
+      +dec
+    +`</div>`
+    +`<p class="fc-stat">model error ±<b>${f.err_bp} bp</b> · R² <b>${f.r2}</b> · 6–18mo gravity, not a timing call</p>`
+    +`</div>`;
+}
+function fcScore(d){
+  const s=d.score; if(!s) return "";
+  const n=s.n||0;
+  const seeded=(d.recent||[]).some(r=>r.src==="backtest");
+  let head=`<div class="fc-track"><div class="fc-track-hd"><h4>TRACK RECORD</h4>`
+    +`<span class="fc-track-sub">${n} scored session${n===1?"":"s"}${seeded?" · backtest-seeded":""}</span></div>`;
+  if(n<40){
+    head+=`<p class="fc-calib">Calibrating — logs each day and learns once ~40 sessions are scored `
+      +`(currently ${n}). Until then the bands run uncalibrated (×1.00).</p>`;
+  }else{
+    const was=(s.raw_cov90!=null&&s.raw_cov90!==s.cov90)?` (was ${s.raw_cov90}% before calibration)`:"";
+    head+=`<div class="fc-trow">`
+      +`<span><span class="k">90% band covered</span> <b>${s.cov90}%</b> <span class="k">of ${n} · target 90%</span>${was}</span>`
+      +`<span><span class="k">50% band</span> <b>${s.cov50}%</b> <span class="k">· target 50%</span></span>`
+      +`</div>`;
+    head+=`<p class="fc-calib">Auto-calibration: band width <b>×${s.mult_day.toFixed(2)}</b> `
+      +`(day) / <b>×${s.mult_week.toFixed(2)}</b> (week), nudged from the track record so the 90% band `
+      +`keeps covering ~90%. Re-learns from every new session.</p>`;
+    if(s.ev_mult_day&&s.ev_n_day){
+      head+=`<p class="fc-calib">Event learning: scheduled-catalyst days (CPI, jobs, PCE…) move `
+        +`<b>×${s.ev_mult_day.toFixed(2)}</b> vs normal days, learned from <b>${s.ev_n_day}</b> of them. `
+        +`The band widens by that factor when a catalyst is due.</p>`;
+    }
+    if(s.mae_day!=null){
+      head+=`<p class="fc-calib">Point-forecast accuracy (no-change baseline): the next close lands within `
+        +`<b>±${s.mae_day} bp</b> on average (RMSE ±${s.rmse_day}); the weekly close within `
+        +`<b>±${s.mae_week} bp</b> (RMSE ±${s.rmse_week}), over ${n} sessions. This is the bar any `
+        +`contextual model has to beat.</p>`;
+    }
+  }
+  // recency strip: oldest -> newest, green = inside 90% band, red = outside
+  const rec=(d.recent||[]).slice().reverse();
+  if(rec.length){
+    head+=`<div class="fc-strip"><span class="k">last ${rec.length}:</span> `
+      +rec.map(r=>`<span class="fc-sq ${r.in90?"":"out"} ${r.src==="backtest"?"bt":""}" `
+        +`title="${r.date}: ${r.real_bp>0?"+":""}${r.real_bp}bp — ${r.in90?"inside":"OUTSIDE"} 90% band"></span>`).join("")
+      +` <span class="k" style="margin-left:6px">newest →</span></div>`;
+  }
+  if(d.note){
+    head+=`<p class="fc-note">✦ ${esc(d.note)}</p>`;
+  }
+  return head+`</div>`;
+}
+function fcAI(d){
+  const a=d.ai; if(!a) return "";
+  const nL=(d.next_label||"MONDAY");
+  const mon=a.monday!=null?a.monday.toFixed(2)+"%":"—";
+  const wk=a.week!=null?a.week.toFixed(2)+"%":"—";
+  const leanCls=a.lean==="up"?"up":a.lean==="down"?"down":"";
+  let h=`<div class="fc-ai"><div class="fc-track-hd"><h4>⚙ AI CONTEXTUAL READ</h4>`
+    +`<span class="fc-track-sub">experimental · reads Fed/Treasury/fiscal/political context · scored live vs the no-change baseline</span></div>`;
+  h+=`<div class="fc-ai-call"><span class="fc-ai-num">${nL} CLOSE <b>${mon}</b></span>`
+    +`<span class="fc-ai-num">WEEK CLOSE <b>${wk}</b></span>`
+    +(a.lean?`<span class="fc-ai-lean ${leanCls}">lean ${esc(a.lean.toUpperCase())}</span>`:"")
+    +(a.conf?`<span class="k" style="color:var(--dim)">· confidence ${esc(a.conf)}</span>`:"")+`</div>`;
+  if(a.why) h+=`<p class="fc-ai-why">“${esc(a.why)}”</p>`;
+  if(a.n_day){
+    const better=(a.ai_mae_day!=null&&a.base_mae_day!=null)
+      ?(a.ai_mae_day<a.base_mae_day?"beating":a.ai_mae_day>a.base_mae_day?"behind":"tied with"):"";
+    h+=`<p class="fc-ai-acc">Accuracy so far: AI avg miss <b>±${a.ai_mae_day} bp</b> vs no-change `
+      +`<b>±${a.base_mae_day} bp</b> over ${a.n_day} call${a.n_day===1?"":"s"}`
+      +(a.dir_n?` · direction <b>${a.dir_hit}/${a.dir_n}</b> right`:``)
+      +(better?` · <b>${better}</b> the baseline`:``)+`.</p>`;
+  }else{
+    const base=(d.score&&d.score.mae_day!=null)?`±${d.score.mae_day} bp`:"the baseline";
+    h+=`<p class="fc-ai-acc">Accuracy: <b>building</b> — this call gets scored the moment the next close prints. The number to beat is ${base} (the no-change baseline).</p>`;
+  }
+  if(a.last){
+    const L=a.last;
+    h+=`<p class="fc-ai-last">Last call (${esc(L.date)}): predicted <b>${L.pred}%</b>, actual <b>${L.actual}%</b> — `
+      +`missed <b>${L.err_bp} bp</b>${L.base_err_bp!=null?` (baseline missed ${L.base_err_bp})`:``}`
+      +(L.dir_right===true?` · direction ✓`:L.dir_right===false?` · direction ✗`:``)+`.</p>`;
+    if(L.review) h+=`<p class="fc-ai-review">↩ ${esc(L.review)}</p>`;
+  }
+  h+=`<p class="fc-ai-note">Each new call reads the lessons from its past misses and adjusts — the aim is to get more accurate over time. Honest caveat: public news is priced into Treasuries fast, so beating the baseline is genuinely hard. The scorecard tells the truth either way.</p>`;
+  return h+`</div>`;
+}
+function renderForecast(d){
+  const mv=d.last_chg_bp, cls=mv>0?"up":mv<0?"down":"";
+  const arrow=mv>0?"▲":mv<0?"▼":"·";
+  let asof=d.asof; try{ asof=new Date(d.asof+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"}); }catch(e){}
+  let h=`<div class="fc-now">`
+    +`<span class="fc-lvl">${d.level.toFixed(2)}%</span>`
+    +`<span class="fc-mv ${cls}">${arrow} ${mv>0?"+":""}${mv} bp `
+      +`<span style="color:var(--dim);font-weight:400">(${d.last_sig>0?"+":""}${d.last_sig}σ)</span></span>`
+    +(d.tail?`<span class="fc-tail">TAIL MOVE</span>`:"")
+    +`<span class="fc-lbl">US 10-YEAR · last close ${asof}</span>`
+    +`</div>`;
+  if(d.next_catalyst){
+    h+=`<p class="fc-nextcat">⚑ next scheduled catalyst: <b>${esc(d.next_catalyst.name)}</b> ${esc(d.next_catalyst.when)} — expect a bigger-than-normal move that session.</p>`;
+  }
+  const sc=d.score||{};
+  h+=`<div class="fc-cards">`
+    +fcCard((d.next_label||"TOMORROW")+" CLOSE","1 session",d.day,d.level,sc.mae_day)
+    +fcCard("THIS WEEK CLOSE","5 sessions",d.week,d.level,sc.mae_week)
+    +fcFundCard(d.fund)+`</div>`;
+  h+=fcAI(d);
+  h+=fcScore(d);
+  h+=`<p class="fc-foot">TOMORROW and THIS WEEK are <b>range</b> forecasts: direction is not forecastable `
+    +`(out of sample no simple predictor beats assuming no change, hit rate ~48%), so the center of each band is `
+    +`today's level, not a call that yields rise or fall. The range is an EWMA volatility estimate on the last ~15 `
+    +`months of daily 10Y moves; 50%/90% are normal quantiles; /ZN dollars use ≈$${d.zn_dv01}/bp per contract. `
+    +(d.fund?`FUNDAMENTAL is a slow fair-value anchor — the 10Y regressed on the 2Y (expected Fed path) and core `
+      +`inflation, 2000–present; the gap is where fundamentals pull over 6–18 months, within a ±${d.fund.err_bp}bp `
+      +`typical error, so small gaps mean "at fair value." `:``)
+    +`All statistical ranges, not investment advice.</p>`;
+  document.getElementById("fc-body").innerHTML=h;
+}
 
 /* ---------------- monitor (live WebSocket stream + polling fallback) ---------------- */
 function renderMonitor(data){
