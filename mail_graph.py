@@ -355,23 +355,27 @@ async def get_message(session, msg_id):
     if m.get("hasAttachments") or (body_type == "html" and "cid:" in body_html.lower()):
         from urllib.parse import quote as _q
         try:
+            # contentId lives on fileAttachment, not the base attachment type, so selecting it
+            # here makes Graph 400 the whole list. Select base fields; read contentId per image below.
             ad = await _get(session, f"{_base()}/messages/{msg_id}/attachments",
-                            {"$select": "id,name,contentType,size,isInline,contentId"})
+                            {"$select": "id,name,contentType,size,isInline"})
             for a in ad.get("value", []):
                 ctype = a.get("contentType") or ""
                 is_img = ctype.startswith("image/")
-                cid = (a.get("contentId") or "").strip("<>")
+                cid, cb = "", None
+                if is_img and (a.get("size") or 0) <= 8_000_000:
+                    try:
+                        full = await _get(session,
+                               f"{_base()}/messages/{msg_id}/attachments/{_q(a.get('id',''), safe='')}")
+                        cid = (full.get("contentId") or "").strip("<>")
+                        cb = full.get("contentBytes")
+                    except Exception:
+                        pass
                 # an image is "embedded" if the body references it by cid, OR Graph flags it inline.
                 # match the cid case-insensitively so the image lands in place, not at the bottom.
                 ref = bool(is_img and cid and body_type == "html"
                            and f"cid:{cid}".lower() in body_html.lower())
                 if is_img and (a.get("isInline") or ref):
-                    try:
-                        cb = (await _get(session,
-                              f"{_base()}/messages/{msg_id}/attachments/{_q(a.get('id',''), safe='')}"
-                              )).get("contentBytes")
-                    except Exception:
-                        cb = None
                     if cb:
                         datauri = f"data:{ctype};base64,{cb}"
                         if ref:
@@ -555,9 +559,13 @@ async def _cli():
             print("\n✓ signed in as", account_email(), "— token saved to", TOKEN_FILE)
         elif cmd == "diag":
             import re as _re
-            msgs = await list_messages(s, top=1)
+            # `diag weekly cash` -> newest inbox message whose subject contains that text
+            want = " ".join(sys.argv[2:]).strip().lower()
+            msgs = await list_messages(s, top=50 if want else 1)
+            if want:
+                msgs = [x for x in msgs if want in (x["subject"] or "").lower()]
             if not msgs:
-                print("inbox empty"); return
+                print("no matching message" if want else "inbox empty"); return
             mid = msgs[0]["id"]
             print("latest:", (msgs[0]["subject"] or "")[:60])
             mm = await _get(s, f"{_base()}/messages/{mid}", {"$select": "body,hasAttachments"})
@@ -574,13 +582,20 @@ async def _cli():
                 print(f"   img[{kind}] src[:90]:", src[:90])
             # always list attachments — Graph hides inline-only images behind hasAttachments=false
             ad = await _get(s, f"{_base()}/messages/{mid}/attachments",
-                            {"$select": "id,name,contentType,size,isInline,contentId"})
+                            {"$select": "id,name,contentType,size,isInline"})
             vals = ad.get("value", [])
             if not vals:
                 print("   (no attachments returned by Graph)")
             for a in vals:
                 print(f"   ATT name={a.get('name')!r} type={a.get('contentType')} "
-                      f"inline={a.get('isInline')} cid={a.get('contentId')!r} size={a.get('size')}")
+                      f"inline={a.get('isInline')} size={a.get('size')}")
+            # end to end: what K Mail's reading pane actually gets
+            gm = await get_message(s, mid)
+            gb = gm["body"]
+            print("K MAIL VIEW: images rendered (data:):", gb.count("data:image/"),
+                  "| still cid:", gb.lower().count("cid:"),
+                  "| still remote:", len(_re.findall(r'<img[^>]+src=["\']?https?://', gb, flags=_re.I)),
+                  "| file attachments:", [x["name"] for x in gm["attachments"]])
         elif cmd == "whoami":
             print(await _cache_email(s) or "not signed in")
         elif cmd == "inbox":
