@@ -87,6 +87,7 @@
   .navbtn{color:var(--amber);background:transparent;border:1px solid #4a3a15;
     padding:4px 10px;cursor:pointer;font-family:var(--mono);font-size:12px;font-weight:700;
     letter-spacing:.03em;white-space:nowrap;transition:background .12s,color .12s;}
+  @media (max-width:1600px){ #titlebar .navgroup{gap:4px;} .navbtn{padding:4px 7px;} }
   .navbtn:hover{background:var(--amber);color:#000;border-color:var(--amber);}
   .navbtn:active{transform:translateY(1px);}
   /* investment calculator (local only) */
@@ -474,6 +475,11 @@
   }
   /* ---------------- FORECAST (10Y band) ---------------- */
   #fc-body{max-width:1160px;font-family:var(--mono);}
+  .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e0403a;
+    box-shadow:0 0 6px #e0403a;margin-right:6px;vertical-align:1px;}
+  .live-frame{width:min(100%,calc((100vh - var(--hdr-h,110px) - 70px)*16/9));aspect-ratio:16/9;
+    margin:8px auto 0;background:#000;border:1px solid #2a2a2a;}
+  .live-frame iframe{display:block;width:100%;height:100%;border:0;}
   .fc-now{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:10px 0 4px;}
   .fc-now .fc-lvl{color:var(--amber);font-size:30px;font-weight:700;letter-spacing:.01em;}
   .fc-now .fc-lbl{color:var(--dim);font-size:12px;}
@@ -675,6 +681,7 @@
     <div class="navgroup">
       <button class="navbtn" onclick="showMonitor()">MONITOR</button>
       <button class="navbtn" onclick="showNews(null)">NEWS</button>
+      <button class="navbtn" onclick="showLive()"><span class="live-dot"></span>BLOOMBERG LIVE</button>
       <button class="navbtn" onclick="showTopBond()">TOP BOND</button>
       <button class="navbtn" id="nav-forecast" onclick="showForecast()" style="display:none">FORECAST</button>
       <button class="navbtn" onclick="showOptionsNav()">OPTIONS</button>
@@ -804,6 +811,14 @@
       <span class="ctitle" id="nv-title">MARKET NEWS</span></div>
     <div class="nb-sub" id="nv-sub"></div>
     <div class="news" id="nv-news"></div>
+  </div>
+
+  <div id="liveview" class="view" style="padding:6px 12px;">
+    <div class="chart-top"><button class="btn" onclick="showMonitor()">← Monitor</button>
+      <button class="btn" onclick="showLive(true)">↻ Reload</button>
+      <a class="btn" id="live-yt" target="_blank" rel="noopener" style="display:none;text-decoration:none">Open on YouTube</a>
+      <span class="ctitle" id="live-title" style="margin-left:auto">BLOOMBERG LIVE</span></div>
+    <div id="live-body"></div>
   </div>
 
   <div id="forecastview" class="view" style="padding:6px 12px;">
@@ -998,8 +1013,34 @@ setTimeout(hideSplash,6000);
 })();
 
 function show(id){document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
-  document.getElementById(id).classList.add("active");}
+  document.getElementById(id).classList.add("active");
+  if(id!=="liveview") stopLive();}   // a hidden iframe keeps playing audio, so drop the player on leaving
 function showMonitor(){show("monitor");}
+
+/* ---------------- BLOOMBERG LIVE (official YouTube stream, embedded player) ---------------- */
+function stopLive(){ const b=document.getElementById("live-body"); if(b) b.innerHTML=""; }
+async function showLive(force){
+  show("liveview");
+  const b=document.getElementById("live-body"), ti=document.getElementById("live-title"),
+        yt=document.getElementById("live-yt");
+  if(!force && b.querySelector("iframe")) return;
+  b.innerHTML="<p class='dim'>Finding the live stream…</p>";
+  try{
+    const d=await(await fetch("/api/live"+(force?"?fresh=1":""))).json();
+    if(!document.getElementById("liveview").classList.contains("active")) return;   // left while loading
+    if(!d.ok || !d.videoId){
+      ti.textContent="BLOOMBERG LIVE"; yt.style.display="none";
+      b.innerHTML="<p class='dim'>Bloomberg isn't live on YouTube right now. Try ↻ Reload in a few minutes.</p>";
+      return;
+    }
+    ti.textContent=d.source==="Bloomberg"?"BLOOMBERG LIVE":"BLOOMBERG OFF AIR · SHOWING "+d.source.toUpperCase();
+    yt.href="https://www.youtube.com/watch?v="+encodeURIComponent(d.videoId); yt.style.display="";
+    b.innerHTML=`<div class="live-frame"><iframe title="${esc(d.title||d.source)}"
+      src="https://www.youtube.com/embed/${encodeURIComponent(d.videoId)}?autoplay=1&playsinline=1&rel=0"
+      allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen
+      referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  }catch(e){ b.innerHTML="<p class='dim'>Couldn't reach the live stream. Try ↻ Reload.</p>"; }
+}
 
 
 /* ---------------- FORECAST (10Y calibrated band — experiment, Mac only) ---------------- */

@@ -1462,6 +1462,37 @@ async def _fc_ai_review(session, ai, bars, log):
         pass
 
 
+# Bloomberg Live tab: no public Bloomberg API, so find the current stream on its official YouTube
+# channel and let the page play it in YouTube's own player. First live channel wins.
+_LIVE_CHANNELS = [("Bloomberg", "@markets"), ("Yahoo Finance", "@YahooFinance")]
+_LIVE_CACHE = {"t": 0, "data": None}
+
+
+async def api_live(request):
+    import time as _time
+    now = _time.time()
+    if _LIVE_CACHE["data"] and now - _LIVE_CACHE["t"] < 60 and not request.query.get("fresh"):
+        return web.json_response(_LIVE_CACHE["data"])
+    out = {"ok": False}
+    for source, handle in _LIVE_CHANNELS:
+        try:
+            async with request.app["session"].get(f"https://www.youtube.com/{handle}/live",
+                                                  headers=td.UA,
+                                                  timeout=aiohttp.ClientTimeout(total=12)) as r:
+                page = await r.text()
+        except Exception:
+            continue
+        vid = re.search(r'<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([\w-]{11})"', page)
+        if not vid or '"isLiveNow":true' not in page or '"playableInEmbed":true' not in page:
+            continue
+        ttl = re.search(r"<title>(.*?)(?: - YouTube)?</title>", page, flags=re.S)
+        out = {"ok": True, "source": source, "videoId": vid.group(1),
+               "title": html.unescape(ttl.group(1)).strip() if ttl else source}
+        break
+    _LIVE_CACHE.update(t=now, data=out)
+    return web.json_response(out)
+
+
 async def api_forecast(request):
     import time as _time, math
     if not _forecast_ready():
@@ -3868,6 +3899,7 @@ def make_app():
     app.router.add_post("/api/mail/read", api_mail_read)
     app.router.add_get("/api/mail/unread", api_mail_unread)
     app.router.add_get("/api/forecast", api_forecast)
+    app.router.add_get("/api/live", api_live)
     app.router.add_get("/api/portfolio", api_portfolio)
     app.router.add_get("/api/news", api_news)
     app.router.add_get("/api/news_board", api_news_board)
