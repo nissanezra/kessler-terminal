@@ -293,6 +293,7 @@ async def _econ_nasdaq_map(session, today, fresh=False):
         d = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=off)).strftime("%Y-%m-%d")
         try:
             async with session.get(NASDAQ_ECON, params={"date": d}, headers=_ECON_UA,
+                                   ssl=td.NASDAQ_SSL,
                                    timeout=aiohttp.ClientTimeout(total=12)) as r:
                 if r.status != 200:
                     continue
@@ -656,6 +657,10 @@ FUND_ORDER = ["Exchange", "Market Cap", "P/E (ttm)", "P/E (fwd)", "EPS (ttm)",
               "Day High", "Day Low", "Volume"]
 
 
+# ETF whose dividend stands in for a Nasdaq-fed index (proxy indices use their own ETF)
+INDEX_DIV_ETF = {"COMP": "ONEQ", "NDX": "QQQ", "SOX": "SOXX"}
+
+
 async def api_security(request):
     """Ticker detail: header quote, fundamentals grid, and P/E history."""
     ticker = request.query.get("ticker", "AAPL").upper()
@@ -681,6 +686,16 @@ async def api_security(request):
         if not etf_holdings:                              # ETFs show holdings, not P/E
             pe = await td.fetch_pe_history(s, ticker, n=30)
     fields = [{"k": k, "v": fund[k]} for k in FUND_ORDER if fund and k in fund]
+    # Indices publish no dividend, so show the tracking ETF's (labeled "via SPY" etc.).
+    div_etf = (idx[1] if idx[0] == "proxy" else INDEX_DIV_ETF.get(idx[1])) if idx else None
+    if div_etf:
+        try:
+            ef = await td.fetch_fundamentals(s, div_etf) or {}
+        except Exception:
+            ef = {}
+        fields = [f for f in fields if f["k"] not in ("Dividend", "Div Yield")]
+        fields[:0] = [{"k": f"{k} (via {div_etf})", "v": ef[k]}
+                      for k in ("Div Yield", "Dividend") if ef.get(k)]
     name = (prox[1] if prox else (fund.get("Name") if fund else "")) or ""
     return web.json_response({
         "ticker": ticker,

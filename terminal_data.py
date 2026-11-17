@@ -13,6 +13,7 @@ import html as _html
 import json
 import math
 import re
+import ssl
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -90,6 +91,13 @@ BINANCE_KLINES = "https://data-api.binance.vision/api/v3/klines"
 NASDAQ_CHART = "https://api.nasdaq.com/api/quote/{t}/chart"
 NASDAQ_HDR = {"User-Agent": "Mozilla/5.0", "Accept": "application/json",
               "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
+# Nasdaq's Akamai edge 403s Python's default TLS handshake (curl/browsers pass). A
+# browser-style TLS 1.2 cipher list changes the fingerprint enough to get through.
+# Pass ssl=NASDAQ_SSL on every api.nasdaq.com request.
+NASDAQ_SSL = ssl.create_default_context()
+NASDAQ_SSL.set_ciphers("ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
+                       "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+                       "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305")
 
 TF_ORDER = ["1D", "1W", "1M", "3M", "6M", "1Y", "5Y", "10Y", "ALL"]
 
@@ -157,7 +165,7 @@ async def _nasdaq_chart(session, ticker, params):
     for ac in ("stocks", "etf"):
         try:
             async with session.get(NASDAQ_CHART.format(t=ticker.upper()),
-                                   params={**params, "assetclass": ac}, headers=NASDAQ_HDR,
+                                   params={**params, "assetclass": ac}, headers=NASDAQ_HDR, ssl=NASDAQ_SSL,
                                    timeout=aiohttp.ClientTimeout(total=15)) as r:
                 data = await r.json(content_type=None)
         except Exception:
@@ -366,7 +374,28 @@ async def fetch_auctions(session, days=150, limit=25):
     return out[:limit]
 
 
+async def _nasdaq_index_intraday(session, symbol):
+    """Today's minute bars ("9:30 AM" labels) + the live index level."""
+    async with session.get(NASDAQ_CHART.format(t=symbol), params={"assetclass": "index"},
+                           headers=NASDAQ_HDR, ssl=NASDAQ_SSL,
+                           timeout=aiohttp.ClientTimeout(total=15)) as r:
+        data = ((await r.json(content_type=None)) or {}).get("data") or {}
+    bars = []
+    for p in data.get("chart") or []:
+        try:
+            bars.append({"t": p["z"]["dateTime"].replace(" ET", ""), "c": float(p["y"])})
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    try:
+        live = float(str(data.get("lastSalePrice", "")).replace(",", ""))
+    except ValueError:
+        live = None
+    return bars, live
+
+
 async def _nasdaq_index_hist(session, symbol, tf, custom=None):
+    if tf == "1D" and not custom:
+        return (await _nasdaq_index_intraday(session, symbol))[0]
     if custom:
         fromdate, today = custom
     else:
@@ -375,7 +404,8 @@ async def _nasdaq_index_hist(session, symbol, tf, custom=None):
         today = datetime.now().strftime("%Y-%m-%d")
     async with session.get(NASDAQ_CHART.format(t=symbol),
                            params={"assetclass": "index", "fromdate": fromdate, "todate": today},
-                           headers=NASDAQ_HDR, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                           headers=NASDAQ_HDR, ssl=NASDAQ_SSL,
+                           timeout=aiohttp.ClientTimeout(total=15)) as r:
         data = await r.json(content_type=None)
     bars = []
     for p in ((data or {}).get("data", {}) or {}).get("chart") or []:
@@ -388,6 +418,18 @@ async def _nasdaq_index_hist(session, symbol, tf, custom=None):
             bars.append({"t": label, "c": float(p["y"])})
         except (KeyError, TypeError, ValueError):
             continue
+    # Nasdaq stamps YESTERDAY's close onto today's daily bar during the session, so the
+    # chart would end flat at yesterday. Put the live index level on today's point.
+    if bars and not custom and datetime.now().weekday() < 5:
+        try:
+            live = (await _nasdaq_index_intraday(session, symbol))[1]
+        except Exception:
+            live = None
+        if live:
+            if bars[-1]["t"] == today:
+                bars[-1]["c"] = live
+            elif bars[-1]["t"] < today:
+                bars.append({"t": today, "c": live})
     return bars
 
 
@@ -956,7 +998,7 @@ async def fetch_option_chain(session, symbol, max_exps=None):
                   "money": "all", "type": "all"}
         try:
             async with session.get(NASDAQ_OPT.format(t=sym), params=params,
-                                   headers=NASDAQ_HDR,
+                                   headers=NASDAQ_HDR, ssl=NASDAQ_SSL,
                                    timeout=aiohttp.ClientTimeout(total=20)) as r:
                 if r.status != 200:
                     return None
@@ -1015,7 +1057,7 @@ async def fetch_institutional_holders(session, ticker, top=15):
             NASDAQ_INST.format(t=ticker.upper()),
             params={"limit": str(top), "type": "TOTAL",
                     "sortColumn": "marketValue", "sortOrder": "DESC"},
-            headers=NASDAQ_HDR, timeout=aiohttp.ClientTimeout(total=12)) as r:
+            headers=NASDAQ_HDR, ssl=NASDAQ_SSL, timeout=aiohttp.ClientTimeout(total=12)) as r:
             if r.status != 200:
                 return None
             d = await r.json(content_type=None)
