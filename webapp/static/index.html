@@ -176,6 +176,10 @@
   .legend{display:flex;gap:16px;margin:2px 0 4px;font-size:12px;color:var(--dim);}
   .legend .legtog{cursor:pointer;user-select:none;}
   .daterow{display:none;gap:6px;align-items:center;margin:4px 0;}
+  .idxstats{display:flex;gap:18px;flex-wrap:wrap;margin:2px 0 4px;font-size:13px;}
+  .idxstats:empty{display:none;}
+  .idxstats .fk{color:var(--dim);margin-right:6px;}
+  .idxstats .fv{color:var(--white);font-weight:700;}
   .daterow.show{display:flex;}
   .daterow input[type=date]{background:#141414;border:1px solid #2a2a2a;color:var(--white);
     font-family:var(--mono);font-size:12px;padding:2px 6px;color-scheme:dark;}
@@ -753,6 +757,7 @@
       <button class="btn" onclick="overlayFromChart('full')">Overlay</button>
       <button class="btn print-btn" onclick="doPrint()">Print</button>
     </div>
+    <div class="idxstats" id="cf-stats"></div>
     <div class="daterow" id="cf-daterow"><input type="date" id="cf-from"><span class="dsep">→</span>
       <input type="date" id="cf-to"><button class="btn" onclick="applyCustom('full')">Go</button></div>
     <div class="legend" id="cf-legend"></div>
@@ -2022,6 +2027,7 @@ async function showChart(ticker,tf){
   tfButtons("cf-tfbar",state.full.custom?"CUSTOM":state.full.tf,"setFullTf","full");
   updateRange("full");
   renderLegend("cf-legend");
+  loadIndexStats(ticker);
   setLoading(true,ticker);
   const d=await loadChartInto("chart-full",ticker,state.full.tf,state.full.custom);
   if(state.full.ticker!==ticker)return;           // superseded by a newer pick
@@ -2037,6 +2043,16 @@ async function showChart(ticker,tf){
       el.className=chg>=0?"up":"down";}}
 }
 function setFullTf(tf){showChart(state.full.ticker,tf);}
+/* index P/E + dividend row (via the tracking ETF); empty for non-indices.
+   Fetched once per ticker, not on every timeframe change. */
+async function loadIndexStats(ticker){
+  const el=document.getElementById("cf-stats");
+  if(el.dataset.ticker===ticker)return;
+  el.dataset.ticker=ticker; el.innerHTML="";
+  let d; try{d=await(await fetch(`/api/indexstats?ticker=${encodeURIComponent(ticker)}`)).json();}catch(e){return;}
+  if(el.dataset.ticker!==ticker||!d.stats)return;
+  el.innerHTML=d.stats.map(f=>`<span><span class="fk">${f.k}</span><span class="fv">${f.v}</span></span>`).join("");
+}
 
 /* security (ticker) page */
 async function showSecurity(ticker){

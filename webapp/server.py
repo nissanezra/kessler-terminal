@@ -657,8 +657,38 @@ FUND_ORDER = ["Exchange", "Market Cap", "P/E (ttm)", "P/E (fwd)", "EPS (ttm)",
               "Day High", "Day Low", "Volume"]
 
 
-# ETF whose dividend stands in for a Nasdaq-fed index (proxy indices use their own ETF)
+# Indices publish no P/E or dividend, so show the tracking ETF's, labeled "(via SPY)".
+# Nasdaq-fed indices map here; proxy indices (Dow/S&P/Russell) use their own ETF.
 INDEX_DIV_ETF = {"COMP": "ONEQ", "NDX": "QQQ", "SOX": "SOXX"}
+_IDX_STATS_CACHE = {}
+
+
+async def _index_etf_stats(s, ticker):
+    """[{k, v}] P/E, Div Yield, Dividend for an index via its tracking ETF ([] if none)."""
+    import time as _time
+    idx = td.resolve_index(ticker)
+    etf = (idx[1] if idx[0] == "proxy" else INDEX_DIV_ETF.get(idx[1])) if idx else None
+    if not etf:
+        return []
+    hit = _IDX_STATS_CACHE.get(etf)
+    if hit and _time.time() - hit[0] < 600:
+        return hit[1]
+    try:
+        fund, pe = await asyncio.gather(td.fetch_fundamentals(s, etf), td.fetch_etf_pe(s, etf))
+    except Exception:
+        fund, pe = None, None
+    fund = fund or {}
+    vals = {"P/E": pe, "Div Yield": fund.get("Div Yield"), "Dividend": fund.get("Dividend")}
+    out = [{"k": f"{k} (via {etf})", "v": v} for k, v in vals.items() if v]
+    if out:
+        _IDX_STATS_CACHE[etf] = (_time.time(), out)
+    return out
+
+
+async def api_indexstats(request):
+    """Index P/E + dividend (via tracking ETF) for the chart header; [] for non-indices."""
+    ticker = request.query.get("ticker", "").upper()
+    return web.json_response({"stats": await _index_etf_stats(request.app["session"], ticker)})
 
 
 async def api_security(request):
@@ -686,16 +716,12 @@ async def api_security(request):
         if not etf_holdings:                              # ETFs show holdings, not P/E
             pe = await td.fetch_pe_history(s, ticker, n=30)
     fields = [{"k": k, "v": fund[k]} for k in FUND_ORDER if fund and k in fund]
-    # Indices publish no dividend, so show the tracking ETF's (labeled "via SPY" etc.).
-    div_etf = (idx[1] if idx[0] == "proxy" else INDEX_DIV_ETF.get(idx[1])) if idx else None
-    if div_etf:
-        try:
-            ef = await td.fetch_fundamentals(s, div_etf) or {}
-        except Exception:
-            ef = {}
-        fields = [f for f in fields if f["k"] not in ("Dividend", "Div Yield")]
-        fields[:0] = [{"k": f"{k} (via {div_etf})", "v": ef[k]}
-                      for k in ("Div Yield", "Dividend") if ef.get(k)]
+    if idx:                             # P/E + dividend via the tracking ETF
+        stats = await _index_etf_stats(s, ticker)
+        if stats:
+            fields = [f for f in fields
+                      if f["k"] not in ("Dividend", "Div Yield", "P/E (ttm)")]
+            fields[:0] = stats
     name = (prox[1] if prox else (fund.get("Name") if fund else "")) or ""
     return web.json_response({
         "ticker": ticker,
@@ -3902,6 +3928,7 @@ def make_app():
     app.router.add_post("/api/add", api_add)
     app.router.add_get("/api/chart", api_chart)
     app.router.add_get("/api/security", api_security)
+    app.router.add_get("/api/indexstats", api_indexstats)
     app.router.add_get("/api/symsearch", api_symsearch)
     app.router.add_get("/api/financials", api_financials)
     app.router.add_get("/api/options", api_options)

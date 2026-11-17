@@ -850,6 +850,33 @@ def _sa_deref_description(flat):
     return v.strip() if isinstance(v, str) and v.strip() else None
 
 
+_ETF_PE_CACHE = {}
+
+
+async def fetch_etf_pe(session, etf):
+    """Current P/E of an ETF's holdings, scraped from its StockAnalysis overview page
+    (the "PE Ratio" row). Stands in for an index P/E (SPY -> S&P 500). Cached 30 min."""
+    key = etf.upper()
+    hit = _ETF_PE_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < 1800:
+        return hit[1]
+    pe = None
+    try:
+        async with session.get(f"https://stockanalysis.com/etf/{key.lower()}/",
+                               headers={**UA, "Referer": "https://stockanalysis.com/"},
+                               timeout=aiohttp.ClientTimeout(total=12)) as r:
+            if r.status == 200:
+                m = re.search(r"PE Ratio</td>\s*<td[^>]*>(.*?)</td>", await r.text(), re.S)
+                if m:
+                    v = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+                    pe = v if re.fullmatch(r"[0-9][0-9,.]*", v) else None
+    except Exception:
+        pe = None
+    if pe:
+        _ETF_PE_CACHE[key] = (time.time(), pe)
+    return pe
+
+
 async def fetch_description(session, ticker):
     """One-paragraph company/ETF description, or None if the profile has none."""
     key = ticker.upper()
